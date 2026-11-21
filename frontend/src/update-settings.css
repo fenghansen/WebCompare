@@ -1,0 +1,7 @@
+.update-settings {border-block-start:1px solid var(--border);padding-block:10px;margin-block-start:10px}
+.update-settings h3 {font-size:1rem;margin:0}
+.update-settings p {margin:6px 0;white-space:pre-wrap;overflow-wrap:anywhere}
+.update-settings .dialog-actions {align-items:center;justify-content:flex-start;margin-top:8px}
+.update-settings input {vertical-align:middle}
+.update-notice {position:fixed;inset:auto 16px 16px auto;z-index:1000;display:flex;gap:6px;padding:8px;border:1px solid var(--border);border-radius:8px;background:var(--surface);box-shadow:var(--shadow)}
+.update-settings [hidden] {display:none}

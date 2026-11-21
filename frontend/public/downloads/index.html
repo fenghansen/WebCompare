@@ -1,0 +1,365 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f3f7fc">
+  <script src="assets/theme.js"></script>
+  <meta name="description" content="选择 WebCompare 的运行方式：Windows 便携 ZIP，Linux 服务器 Web 与 SSH 转发，以及可选的 Linux 桌面版。">
+  <title>下载 WebCompare · 选择运行方式</title>
+  <link rel="icon" type="image/svg+xml" href="assets/icon.svg">
+  <style>
+    :root { color-scheme:light; --paper:#f3f7fc; --ink:#142237; --muted:#52657b; --line:#cad8e7; --surface:#e9f0f8; --card:#ffffffd9; --blue:#075bcc; --cyan:#027b8e; --button:#075bcc; --button-hover:#064da9; --button-ink:#fff; --ice:#7edbff; --mono:ui-monospace,"Cascadia Code",Consolas,monospace; }
+    :root[data-theme="dark"] { color-scheme:dark; --paper:#08111f; --ink:#edf5ff; --muted:#a2b5cc; --line:#293e56; --surface:#122239; --card:#0f1e31e8; --blue:#80baff; --cyan:#79dce7; --button:#8bcaff; --button-hover:#b5dfff; --button-ink:#081a30; }
+    * { box-sizing:border-box; }
+    html { scroll-behavior:smooth; scroll-padding-top:28px; }
+    body { margin:0; background:radial-gradient(ellipse at 88% 5%,#398fff13,transparent 45%),var(--paper); color:var(--ink); font:17px/1.7 "Segoe UI","PingFang SC","Microsoft YaHei UI",sans-serif; -webkit-font-smoothing:antialiased; }
+    body:before { content:""; position:absolute; inset:0 0 auto; height:880px; z-index:-1; background-image:linear-gradient(var(--line) 1px,transparent 1px),linear-gradient(90deg,var(--line) 1px,transparent 1px); background-size:48px 48px; opacity:.22; mask-image:linear-gradient(#000,transparent); pointer-events:none; }
+    a { color:inherit; text-decoration:none; }
+    button { font:inherit; }
+    a,button { -webkit-tap-highlight-color:transparent; }
+    a:focus-visible,button:focus-visible,summary:focus-visible { outline:3px solid var(--blue); outline-offset:5px; }
+    svg { display:block; }
+    .wrap { width:min(1240px,calc(100% - 96px)); margin-inline:auto; }
+    .nav { min-height:100px; display:flex; justify-content:space-between; align-items:center; gap:24px; border-bottom:1px solid var(--line); }
+    .brand { display:flex; align-items:center; gap:12px; font-size:23px; font-weight:650; letter-spacing:-.7px; }
+    .brand-mark { width:37px; height:37px; flex-shrink:0; }
+    .brand small { margin-left:8px; padding-left:18px; border-left:1px solid var(--line); font:14px var(--mono); letter-spacing:1px; color:var(--muted); }
+    .nav-links { display:flex; align-items:center; flex-wrap:wrap; gap:12px 28px; font-size:16px; }
+    .nav-links a:hover { color:var(--blue); }
+    .language-toggle { min-height:34px; padding:4px 10px; border:1px solid var(--line); border-radius:8px; background:var(--card); color:var(--ink); font-size:14px; white-space:nowrap; cursor:pointer; }
+    .language-toggle:hover { color:var(--blue); }
+    .theme-toggle { display:flex; gap:2px; padding:4px; border:1px solid var(--line); border-radius:8px; background:var(--card); }
+    .theme-toggle button { min-height:34px; border:0; border-radius:4px; padding:4px 10px; background:transparent; color:var(--muted); font-size:14px; cursor:pointer; }
+    .theme-toggle button:hover { color:var(--ink); }
+    .theme-toggle button[aria-pressed="true"] { color:var(--button-ink); background:var(--button); }
+    .online { display:flex; align-items:center; gap:9px; }
+    .arrow { width:18px; height:18px; }
+    .hero { padding:68px 0 91px; display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.55fr); gap:54px; align-items:center; }
+    .hero-copy { padding-bottom:6px; }
+    .eyebrow { display:flex; align-items:center; gap:11px; margin:0 0 26px; font:14px/1.6 var(--mono); letter-spacing:.9px; color:var(--cyan); }
+    .eyebrow:before { content:""; width:8px; height:8px; flex-shrink:0; border:2px solid currentColor; box-shadow:0 0 14px #17b8dc45; }
+    h1 { margin:0; font-size:clamp(50px,4.6vw,68px); font-weight:650; letter-spacing:-2.6px; line-height:1.22; }
+    h1 span { color:var(--blue); }
+    .intro { margin:24px 0; font-size:18px; line-height:1.85; color:var(--muted); }
+    .hero-meta { display:flex; flex-wrap:wrap; align-items:center; gap:8px 11px; font:14px/1.6 var(--mono); color:var(--muted); }
+    .hero-meta .version { color:var(--cyan); }
+    .hero-meta .sep { width:3px; height:3px; background:var(--muted); border-radius:50%; }
+    .hero-link { display:inline-flex; align-items:center; gap:26px; margin-top:30px; padding:12px 18px; border:1px solid var(--blue); border-radius:6px; background:var(--button); color:var(--button-ink); font-size:17px; }
+    .hero-link svg { width:20px; height:20px; transform:rotate(45deg); }
+    .hero-link:hover { background:var(--button-hover); }
+    .visual { min-width:0; position:relative; margin:0; padding:20px; color:#edf5ff; background:linear-gradient(145deg,#18324a,#0a1728 72%); border:1px solid #456c90; border-radius:13px; box-shadow:0 24px 75px -35px #073b9060,0 0 0 6px #4a9ce908; }
+    .visual:before { content:""; position:absolute; top:-1px; left:28px; width:68px; height:2px; background:var(--ice); box-shadow:0 0 18px #58cfff8a; }
+    .demo-toolbar { display:flex; justify-content:space-between; align-items:center; gap:16px; padding:0 2px 16px; }
+    .visual-head { font:14px/1.6 var(--mono); letter-spacing:.9px; color:#b4d2ed; }
+    .demo-modes { display:flex; gap:18px; }
+    .demo-modes button { min-height:42px; border:0; border-bottom:2px solid transparent; padding:3px 2px 7px; background:transparent; color:#b4c5d8; cursor:pointer; font-size:16px; }
+    .demo-modes button:hover { color:#fff; }
+    .demo-modes button[aria-pressed="true"] { color:var(--ice); border-bottom-color:var(--ice); }
+    .visual button:focus-visible { outline-color:var(--ice); }
+    .compare-stage { --split:50%; position:relative; overflow:hidden; aspect-ratio:3/2; border:1px solid #466581; border-radius:5px; background:#0b1624; user-select:none; }
+    .compare-stage[data-mode="split"] { cursor:ew-resize; touch-action:pan-y; }
+    .compare-stage:focus-within { outline:3px solid var(--ice); outline-offset:3px; }
+    .compare-pane { position:absolute; inset:0; overflow:hidden; }
+    .compare-pane svg,.demo-tile svg { display:block; width:100%; height:100%; }
+    .compare-pane[hidden],.split-controls[hidden] { display:none; }
+    .compare-side { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:8px; background:#0a1728; }
+    .demo-tile { position:relative; min-width:0; overflow:hidden; border-radius:3px; }
+    .demo-tile svg { position:absolute; inset:0; }
+    .reference-overlay { opacity:0; }
+    .split-before { position:absolute; inset:0; clip-path:inset(0 calc(100% - var(--split)) 0 0); }
+    .split-divider { position:absolute; inset:0 auto 0 var(--split); width:2px; background:#e9f8ff; transform:translateX(-1px); pointer-events:none; }
+    .split-divider span { position:absolute; top:50%; left:50%; display:grid; place-items:center; width:38px; height:38px; transform:translate(-50%,-50%); background:#e9f8ff; color:#142c43; border-radius:50%; box-shadow:0 2px 12px #0003; font-size:22px; }
+    .compare-stage[data-overlay="true"] .reference-overlay { opacity:1; }
+    .compare-stage[data-overlay="true"] .split-before { clip-path:inset(0 100% 0 0); }
+    .compare-stage[data-overlay="true"] .split-divider,.compare-stage[data-overlay="true"] .before-label { visibility:hidden; }
+    .diff-reference { display:none!important; }
+    .compare-stage[data-overlay="true"] .diff-image { display:none; }
+    .compare-stage[data-overlay="true"] .diff-reference { display:block!important; }
+    .sample-label { position:absolute; left:12px; top:12px; padding:4px 8px; font-size:14px; color:#edf5ff; background:#071523e8; border:1px solid #a1d5ff40; border-radius:4px; }
+    .sample-label.right { left:auto; right:12px; }
+    .split-controls { padding:16px 2px 0; }
+    .split-controls label { display:flex; justify-content:space-between; gap:12px; font-size:16px; color:#c9d8e9; }
+    .split-controls output { font:14px var(--mono); align-self:center; }
+    .split-controls input { display:block; width:100%; margin:8px 0 0; height:24px; accent-color:var(--ice); cursor:ew-resize; }
+    .visual-foot { display:flex; justify-content:space-between; align-items:center; gap:18px; padding:19px 2px 2px; }
+    .visual-foot p { flex:1; min-width:0; margin:0; color:#b8cce0; font-size:16px; line-height:1.7; }
+    .overlay-button { flex-shrink:0; min-height:44px; border:1px solid #6385a4; border-radius:5px; padding:8px 13px; background:#24415b55; color:#edf5ff; cursor:pointer; touch-action:none; user-select:none; }
+    .overlay-button:hover { border-color:var(--ice); }
+    .overlay-button[aria-pressed="true"] { color:#0a1728; background:var(--ice); border-color:var(--ice); }
+    .visual figcaption { position:absolute; bottom:-33px; right:0; font:14px/1.6 var(--mono); color:var(--muted); }
+    #downloads { padding-top:38px; border-top:1px solid var(--line); }
+    .section-top { display:flex; align-items:end; justify-content:space-between; gap:35px; margin-bottom:27px; }
+    .section-tag { display:flex; align-items:center; gap:12px; margin:0 0 12px; font:14px/1.6 var(--mono); letter-spacing:1px; color:var(--cyan); }
+    .section-tag:before { content:""; width:22px; height:2px; background:currentColor; }
+    h2 { margin:0; font-size:34px; font-weight:600; letter-spacing:-1px; line-height:1.4; }
+    .section-top>p { margin:0 0 4px; max-width:360px; color:var(--muted); font-size:17px; }
+    .download-panel { overflow:hidden; border:1px solid var(--line); border-radius:10px; background:var(--card); }
+    .windows,.linux { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,390px); align-items:center; gap:48px; padding:30px; }
+    .linux { border-top:1px solid var(--line); }
+    .platform-head { display:flex; align-items:center; gap:18px; }
+    .platform-icon { width:30px; height:30px; flex-shrink:0; color:var(--blue); }
+    h3 { margin:0; font-size:24px; font-weight:600; letter-spacing:-.5px; line-height:1.5; }
+    .platform-title { display:flex; flex-wrap:wrap; align-items:center; gap:14px; }
+    .recommended { padding:2px 9px; border:1px solid var(--line); border-radius:4px; color:var(--blue); font-size:14px; }
+    .platform-sub { margin:5px 0 0; color:var(--muted); font:14px/1.7 var(--mono); }
+    .platform-note { margin:15px 0 0 48px; color:var(--muted); font-size:16px; line-height:1.8; }
+    .primary-download { display:flex; align-items:center; justify-content:center; gap:12px; min-height:56px; padding:13px 16px; border:1px solid var(--button); border-radius:6px; background:var(--button); color:var(--button-ink); font-size:17px; transition:background .15s; }
+    .primary-download:hover { background:var(--button-hover); border-color:var(--button-hover); }
+    .primary-download svg { width:20px; height:20px; flex-shrink:0; }
+    .file-info { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:7px 16px; margin:12px 0 0; color:var(--muted); font-size:14px; }
+    .file-info a { padding:2px 0; color:var(--blue); font-size:16px; }
+    .file-info a:hover { text-decoration:underline; text-underline-offset:4px; }
+    .linux-actions { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:22px; }
+    .secondary-download { display:flex; align-items:center; justify-content:space-between; gap:10px; min-height:44px; padding:6px 0; color:var(--blue); border-bottom:1px solid var(--line); font-size:17px; }
+    .secondary-download svg { width:18px; height:18px; flex-shrink:0; }
+    .secondary-download:hover { color:var(--ink); border-color:var(--blue); }
+    .linux-actions small { display:block; margin-top:8px; color:var(--muted); font:14px/1.7 var(--mono); }
+    a[aria-disabled="true"] { color:var(--muted); cursor:default; pointer-events:none; text-decoration:none; }
+    .primary-download[aria-disabled="true"] { color:var(--muted); background:var(--surface); border-color:var(--line); }
+    .download-caption { display:flex; align-items:start; justify-content:space-between; gap:24px; padding-top:19px; color:var(--muted); font-size:16px; }
+    .download-caption p { margin:0; }
+    .download-caption a { flex-shrink:0; color:var(--blue); text-decoration:underline; text-underline-offset:4px; }
+    .setup { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.55fr); gap:54px; padding:82px 0 58px; }
+    .setup-intro { margin:17px 0 0; color:var(--muted); font-size:17px; line-height:1.9; }
+    .setup-body { min-width:0; padding-top:3px; }
+    .step { display:grid; grid-template-columns:32px minmax(0,1fr); gap:17px; padding:0 0 25px; }
+    .step+.step { padding-top:25px; border-top:1px solid var(--line); }
+    .step-num { display:grid; place-items:center; align-self:start; height:30px; margin-top:1px; border:1px solid var(--line); border-radius:5px; color:var(--cyan); font:14px var(--mono); background:var(--card); }
+    .step h3 { font-size:19px; letter-spacing:0; }
+    .step p { margin:9px 0 0; color:var(--muted); font-size:17px; line-height:1.85; }
+    .step a,.checksum-content a { color:var(--blue); text-decoration:underline; text-underline-offset:4px; }
+    .step code { overflow-wrap:anywhere; }
+    details { border-top:1px solid var(--line); }
+    summary { display:flex; align-items:center; justify-content:space-between; gap:17px; padding:22px 0; font-size:17px; cursor:pointer; list-style:none; }
+    summary::-webkit-details-marker { display:none; }
+    summary:after { content:"+"; flex-shrink:0; font:23px var(--mono); color:var(--blue); }
+    details[open] summary:after { content:"−"; }
+    .checksum-content { padding-bottom:12px; }
+    .checksum-content p { margin:0 0 12px; color:var(--muted); font-size:16px; line-height:1.8; }
+    [data-checksums][aria-disabled="true"] { color:var(--muted); text-decoration:none; }
+    pre { margin:0; overflow:auto; padding:17px 18px; border:1px solid var(--line); border-radius:6px; color:var(--ink); background:var(--surface); font:14px/1.8 var(--mono); white-space:pre; }
+    code { font-family:var(--mono); font-size:.94em; }
+    pre code { font-size:inherit; }
+    footer { display:flex; align-items:center; justify-content:space-between; gap:30px; padding:28px 0 36px; border-top:1px solid var(--line); color:var(--muted); font-size:16px; }
+    .footer-brand { display:flex; flex-wrap:wrap; align-items:center; gap:12px; font-size:16px; }
+    .footer-brand strong { color:var(--ink); font-weight:600; }
+    footer a { padding:4px 0; }
+    .skip-link { position:absolute; top:8px; left:8px; z-index:5; transform:translateY(-150%); padding:10px 15px; color:var(--button-ink); background:var(--button); border-radius:4px; font-size:16px; }
+    .skip-link:focus { transform:translateY(0); }
+    @media(min-width:1600px) { .hero { padding-block:85px 105px; } }
+    @media(max-width:1100px) { .wrap { width:calc(100% - 64px); } .hero,.setup { gap:36px; grid-template-columns:minmax(0,1fr) minmax(0,1.4fr); } h1 { font-size:54px; } .brand small { display:none; } .visual { padding:17px; } .demo-modes { gap:14px; } .visual-foot { gap:14px; } .windows,.linux { gap:32px; padding:25px; grid-template-columns:minmax(0,1fr) minmax(0,340px); } .platform-note { margin-left:0; } }
+    @media(max-width:850px) { .hero { grid-template-columns:minmax(0,1fr); gap:35px; padding-block:46px 73px; } .hero-copy { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); column-gap:36px; align-items:start; } .eyebrow { grid-column:1/-1; margin-bottom:22px; } h1 { grid-row:2/5; font-size:51px; } .intro { margin:0 0 17px; } .hero-link { margin-top:22px; justify-self:start; } .visual { width:100%; } .setup { gap:32px; grid-template-columns:minmax(0,1fr) minmax(0,1.8fr); } h2 { font-size:30px; } .section-top>p { max-width:270px; } .windows,.linux { gap:26px; grid-template-columns:minmax(0,1fr) minmax(0,300px); } .linux-actions { gap:18px; } }
+    @media(max-width:640px) {
+      .wrap { width:calc(100% - 36px); }
+      .nav { min-height:110px; padding-block:16px; flex-wrap:wrap; gap:13px; }
+      .brand { gap:10px; font-size:22px; }
+      .brand-mark { width:34px; height:34px; }
+      .nav-links>a:first-child { display:none; }
+      .nav-links { width:100%; justify-content:space-between; gap:10px; }
+      .theme-toggle button { padding-inline:9px; }
+      .online { gap:7px; }
+      .hero { gap:31px; padding:37px 0 70px; }
+      .hero-copy { display:block; }
+      .eyebrow { letter-spacing:.5px; margin-bottom:22px; }
+      h1 { font-size:clamp(40px,10.8vw,59px); letter-spacing:-1.7px; line-height:1.24; }
+      .intro { margin:22px 0 20px; font-size:17px; }
+      .hero-meta { gap:9px 11px; }
+      .hero-link { margin-top:24px; }
+      .visual { padding:14px; border-radius:9px; }
+      .demo-toolbar { align-items:center; flex-wrap:wrap; gap:7px; padding:0 1px 12px; }
+      .visual-head { letter-spacing:.5px; }
+      .demo-modes { gap:22px; }
+      .demo-modes button { padding:5px 0 7px; }
+      .visual-foot { flex-wrap:wrap; align-items:start; gap:14px; padding-top:16px; }
+      .visual-foot p { flex:1 1 100%; }
+      .overlay-button { padding:7px 13px; }
+      .sample-label { top:8px; left:8px; padding:2px 6px; }
+      .sample-label.right { left:auto; right:8px; }
+      .compare-side { gap:6px; }
+      .visual figcaption { bottom:-32px; font-size:14px; }
+      #downloads { padding-top:29px; }
+      .section-top { align-items:start; flex-direction:column; gap:13px; margin-bottom:23px; }
+      .section-top>p { max-width:100%; }
+      h2 { font-size:28px; }
+      .windows,.linux { grid-template-columns:minmax(0,1fr); gap:23px; padding:22px 19px; }
+      .platform-head { gap:14px; }
+      .platform-title { gap:10px; }
+      .platform-note { margin-top:13px; }
+      .primary-download { gap:9px; padding-inline:11px; font-size:16px; }
+      .file-info { gap:8px 13px; }
+      .linux-actions { gap:22px; }
+      .download-caption { flex-direction:column; gap:11px; padding-top:18px; }
+      .setup { grid-template-columns:minmax(0,1fr); gap:30px; padding:55px 0 37px; }
+      .setup-intro { margin-top:13px; }
+      .step { grid-template-columns:28px minmax(0,1fr); gap:13px; }
+      footer { align-items:start; flex-direction:column; gap:15px; padding-block:24px 30px; }
+      .footer-brand { gap:8px; }
+    }
+    @media(max-width:370px) { .demo-toolbar { flex-direction:column; align-items:start; gap:9px; } .demo-modes { width:100%; justify-content:space-between; gap:18px; } .linux-actions { grid-template-columns:minmax(0,1fr); gap:19px; } .hero-meta { max-width:260px; } .nav .online { font-size:16px; gap:5px; } }
+
+    .platform-tabs { display:inline-flex; gap:5px; padding:5px; border:1px solid var(--line); border-radius:9px; background:var(--card); }
+    .platform-tabs button { min-width:142px; min-height:46px; border:0; border-radius:5px; padding:8px 24px; background:transparent; color:var(--muted); font-size:18px; cursor:pointer; }
+    .platform-tabs button[aria-selected="true"] { background:var(--button); color:var(--button-ink); }
+    .platform-panel { margin-top:22px; }
+    .platform-panel[hidden] { display:none; }
+    .download-card { padding:30px; }
+    .download-card+.download-card { border-top:1px solid var(--line); }
+    .native-card { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,390px); align-items:center; gap:48px; }
+    .platform-note a,.text-download { color:var(--blue); text-decoration:underline; text-underline-offset:4px; }
+    .package-meta { margin:10px 0 0; color:var(--muted); font:14px/1.7 var(--mono); }
+    .option-note { margin:10px 0 0; color:var(--muted); font-size:17px; line-height:1.8; }
+    .secondary-option h3 { font-size:21px; }
+    .cli-card { padding:30px; border:1px solid var(--line); border-radius:10px; background:var(--card); }
+    .cli-lead { margin:16px 0 0; max-width:1000px; color:var(--muted); font-size:17px; }
+    .cli-steps { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:24px 30px; margin-top:27px; }
+    .cli-step { min-width:0; padding-top:23px; border-top:1px solid var(--line); }
+    .cli-step h4 { margin:0 0 13px; font-size:18px; font-weight:600; }
+    .cli-step>p { margin:0 0 15px; color:var(--muted); font-size:16px; }
+    .install-step { grid-column:1/-1; }
+    .install-options,.system-columns { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:30px; }
+    .install-options>div,.system-columns>div { min-width:0; }
+    .code-label { margin:0 0 10px; color:var(--ink); font-size:16px; }
+    .command-note,.cli-step>p.command-note { margin:11px 0 0; color:var(--muted); font-size:15px; line-height:1.8; }
+    .wheel-download { display:flex; flex-wrap:wrap; align-items:center; gap:8px 15px; margin-top:11px; font-size:16px; }
+    .wheel-download span { color:var(--muted); font:14px/1.7 var(--mono); }
+    .text-download { display:inline-block; padding:4px 0; font-size:16px; }
+    .browser-address { margin:24px 0 0; padding-top:20px; border-top:1px solid var(--line); font-size:17px; color:var(--muted); }
+    .browser-address code { color:var(--ink); }
+    .option-heading { display:flex; flex-wrap:wrap; justify-content:space-between; gap:8px 22px; margin:28px 0 14px; color:var(--muted); font-size:16px; }
+    .system-option h3 { font-size:22px; }
+    .system-badge { padding:2px 9px; border:1px solid var(--line); border-radius:4px; color:var(--muted); font-size:14px; }
+    .system-columns { margin-top:9px; }
+    .system-columns pre { margin-top:15px; }
+    a[download][aria-disabled="true"] { color:var(--muted); text-decoration:none; }
+    @media(max-width:1100px) { .native-card { grid-template-columns:minmax(0,1fr) minmax(0,340px); gap:30px; } .download-card,.cli-card { padding:25px; } }
+    @media(max-width:850px) { .native-card { grid-template-columns:minmax(0,1fr) minmax(0,300px); gap:26px; } .install-options,.system-columns { grid-template-columns:minmax(0,1fr); gap:22px; } }
+    @media(max-width:640px) { .platform-tabs { display:flex; } .platform-tabs button { min-width:0; flex:1; padding-inline:18px; } .download-card,.cli-card { padding:22px 19px; } .native-card,.cli-steps { grid-template-columns:minmax(0,1fr); gap:23px; } .platform-note { margin-left:0; } .cli-steps { margin-top:23px; } .cli-card h3 { font-size:23px; } .cli-lead { font-size:17px; } .cli-step h4 { font-size:18px; } .system-option h3 { font-size:21px; } .browser-address { margin-top:23px; } }
+    @media(prefers-reduced-motion:reduce) { html { scroll-behavior:auto; } * { transition:none!important; } }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#downloads">跳转至下载</a>
+  <svg width="0" height="0" aria-hidden="true" style="position:absolute;overflow:hidden"><defs>
+    <symbol id="icon-download" viewBox="0 0 24 24"><path d="M12 3v12m-4-4 4 4 4-4M4 16v4h16v-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="icon-arrow" viewBox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <linearGradient id="scene-bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#293b4d"/><stop offset="1" stop-color="#10202e"/></linearGradient>
+    <linearGradient id="scene-fold" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#dfebf2"/><stop offset=".45" stop-color="#87b4e2"/><stop offset="1" stop-color="#385a7c"/></linearGradient>
+    <pattern id="scene-lines" width="9" height="9" patternUnits="userSpaceOnUse" patternTransform="rotate(-26)"><path d="M0 0v9" stroke="#edf6ff" stroke-width="1.8" opacity=".6"/></pattern>
+    <symbol id="demo-scene" viewBox="0 0 480 320"><path fill="url(#scene-bg)" d="M0 0h480v320H0z"/><path d="M-30 330C20 164 135 268 180 102S350-6 510-58v410H-30Z" fill="url(#scene-fold)"/><path d="M-30 330C20 164 135 268 180 102S350-6 510-58v410H-30Z" fill="url(#scene-lines)"/><path d="M-10 306c50-131 177-49 210-149S348 108 490 24M2 334c50-131 177-49 210-149S360 136 502 52" fill="none" stroke="#c8e1ff" stroke-width="2" opacity=".65"/><path d="M-40 284C5 145 110 227 157 74S332-41 476-76" fill="none" stroke="#c8e1ff" stroke-width="1.5" opacity=".5"/><circle cx="74" cy="76" r="34" fill="#83b5ff" opacity=".16"/></symbol>
+    <filter id="demo-soft" x="0" y="0" width="100%" height="100%" color-interpolation-filters="sRGB"><feGaussianBlur stdDeviation="3" edgeMode="duplicate"/></filter>
+    <filter id="demo-difference" x="0" y="0" width="100%" height="100%" color-interpolation-filters="sRGB"><feGaussianBlur in="SourceGraphic" stdDeviation="3" edgeMode="duplicate" result="soft"/><feBlend in="SourceGraphic" in2="soft" mode="difference"/><feComponentTransfer><feFuncR type="linear" slope="3"/><feFuncG type="linear" slope="3"/><feFuncB type="linear" slope="3"/></feComponentTransfer></filter>
+  </defs></svg>
+  <header class="wrap nav">
+    <a class="brand" href="../" aria-label="WebCompare 在线版首页">
+      <img class="brand-mark" src="assets/icon.svg" width="36" height="36" alt="">
+      WebCompare <small>DOWNLOADS</small>
+    </a>
+    <nav class="nav-links" aria-label="主导航"><a href="#setup">安装说明</a><div class="theme-toggle" role="group" aria-label="主题"><button type="button" data-theme-mode="system" aria-pressed="true" title="跟随系统主题">系统</button><button type="button" data-theme-mode="light" aria-pressed="false">浅色</button><button type="button" data-theme-mode="dark" aria-pressed="false">深色</button></div><button type="button" id="language-toggle" class="language-toggle" lang="en">English</button><a class="online" href="../">打开在线版 <svg class="arrow" aria-hidden="true"><use href="#icon-arrow"/></svg></a></nav>
+  </header>
+  <main class="wrap">
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <p class="eyebrow">SEE THE PIXEL. FIND THE DIFFERENCE.</p>
+        <h1 id="hero-title">聚焦细节，<br><span>看清差异。</span></h1>
+        <p class="intro">图片、视频帧与模型结果。<br>同步视野，看清每一处细节。</p>
+        <div class="hero-meta"><span class="version">LOCAL + SSH</span><span class="sep"></span><span>Windows / Linux</span></div>
+        <a class="hero-link" href="#downloads">选择运行方式 <svg aria-hidden="true"><use href="#icon-arrow"/></svg></a>
+      </div>
+      <figure class="visual" aria-label="模糊图与清晰图的三种交互对比示意">
+        <div class="demo-toolbar">
+          <div class="visual-head">INTERACTIVE CANVAS</div>
+        <div class="demo-modes" role="group" aria-label="对比模式">
+          <button type="button" data-compare-mode="side" aria-pressed="true" aria-controls="compare-demo">并排</button>
+          <button type="button" data-compare-mode="split" aria-pressed="false" aria-controls="compare-demo">拖动</button>
+          <button type="button" data-compare-mode="diff" aria-pressed="false" aria-controls="compare-demo">差分</button>
+        </div>
+        </div>
+        <div id="compare-demo" class="compare-stage" data-mode="side" data-overlay="false">
+          <div id="compare-side" class="compare-pane compare-side">
+            <div class="demo-tile"><svg viewBox="0 0 480 320" preserveAspectRatio="xMidYMid slice" aria-hidden="true"><use href="#demo-scene" filter="url(#demo-soft)"/></svg><svg class="reference-overlay" viewBox="0 0 480 320" preserveAspectRatio="xMidYMid slice" aria-hidden="true"><use href="#demo-scene"/></svg><span class="sample-label before-label">模糊图</span></div>
+            <div class="demo-tile"><svg viewBox="0 0 480 320" preserveAspectRatio="xMidYMid slice" aria-hidden="true"><use href="#demo-scene"/></svg><span class="sample-label">清晰图</span></div>
+          </div>
+          <div id="compare-split" class="compare-pane" hidden>
+            <svg viewBox="0 0 480 320" aria-hidden="true"><use href="#demo-scene"/></svg>
+            <div class="split-before"><svg viewBox="0 0 480 320" aria-hidden="true"><use href="#demo-scene" filter="url(#demo-soft)"/></svg></div>
+            <span class="sample-label before-label">模糊图</span><span class="sample-label right">清晰图</span>
+            <div class="split-divider" aria-hidden="true"><span>↔</span></div>
+          </div>
+          <div id="compare-diff" class="compare-pane" hidden>
+            <svg class="diff-image" viewBox="0 0 480 320" aria-hidden="true"><use href="#demo-scene" filter="url(#demo-difference)"/></svg>
+            <svg class="diff-reference" viewBox="0 0 480 320" aria-hidden="true"><use href="#demo-scene"/></svg>
+            <span class="sample-label before-label">差分 ×3</span>
+          </div>
+        </div>
+        <div id="compare-split-controls" class="split-controls" hidden><label for="compare-slider">拖动分界线 <output id="compare-position" for="compare-slider">50%</output></label><input id="compare-slider" type="range" min="0" max="100" value="50" aria-label="分割位置"></div>
+        <div class="visual-foot"><p id="compare-hint">并排看细节，按住叠图查看同一位置。</p><button id="compare-overlay" class="overlay-button" type="button" aria-pressed="false">按住叠图</button></div>
+        <figcaption>交互演示 · 抽象示意图</figcaption>
+      </figure>
+    </section>
+    <section id="downloads" aria-labelledby="downloads-title">
+      <div class="section-top"><div><p class="section-tag">02 / CHOOSE YOUR PLATFORM</p><h2 id="downloads-title">按平台，选择入口。</h2></div><p>Windows 首选便携 ZIP。Linux 无 sudo 时，先用服务器 Web 与 SSH。</p></div>
+      <div class="platform-tabs" role="tablist" aria-label="运行平台">
+        <button id="download-tab-windows" type="button" role="tab" aria-selected="true" aria-controls="windows-downloads" data-platform="windows">Windows</button>
+        <button id="download-tab-linux" type="button" role="tab" aria-selected="false" aria-controls="linux-downloads" data-platform="linux" tabindex="-1">Linux</button>
+      </div>
+      <section id="windows-downloads" class="platform-panel" role="tabpanel" aria-labelledby="download-tab-windows" data-platform-panel="windows">
+        <div class="download-panel">
+          <article class="download-card native-card" aria-labelledby="windows-title">
+            <div>
+              <div class="platform-head"><svg class="platform-icon" viewBox="0 0 32 32" aria-hidden="true"><path fill="currentColor" d="m2 6 12-1.7V15H2Zm14-2L30 2v13H16ZM2 17h12v10.7L2 26Zm14 0h14v13l-14-2Z"/></svg><div><div class="platform-title"><h3 id="windows-title">便携 ZIP</h3><span class="recommended">Windows 首选</span></div><p class="platform-sub">Windows 10 / 11 · x64</p></div></div>
+              <p class="platform-note">解压到可写目录后运行 WebCompare。系统需有 <a href="https://developer.microsoft.com/microsoft-edge/webview2/" target="_blank" rel="noopener noreferrer">WebView2 Runtime</a>。</p>
+            </div>
+            <div><a class="primary-download" data-package="windows-zip" download aria-disabled="true" tabindex="-1"><svg aria-hidden="true"><use href="#icon-download"/></svg>下载 Windows 便携 ZIP</a><p class="package-meta" data-package-info="windows-zip">正在检查附件…</p></div>
+          </article>
+          <article class="download-card native-card secondary-option" aria-labelledby="windows-setup-title">
+            <div><h3 id="windows-setup-title">也可使用安装程序</h3><p class="option-note">偏好安装向导时选择。缺少 WebView2 时安装程序会下载运行环境；未签名程序可能出现 SmartScreen 提示，可先核对 SHA-256。</p></div>
+            <div><a class="secondary-download" data-package="windows-setup" download aria-disabled="true" tabindex="-1">Windows 安装程序 <svg aria-hidden="true"><use href="#icon-download"/></svg></a><p class="package-meta" data-package-info="windows-setup">正在检查附件…</p></div>
+          </article>
+        </div>
+      </section>
+      <section id="linux-downloads" class="platform-panel" role="tabpanel" aria-labelledby="download-tab-linux" data-platform-panel="linux">
+        <article class="cli-card" aria-labelledby="linux-web-title">
+          <div class="platform-title"><h3 id="linux-web-title">服务器 Web + SSH</h3><span class="recommended">Linux 首选 · 无需 sudo</span></div>
+          <p class="cli-lead">使用你已有且可写的 Python 3.12+ 环境（venv / conda 均可），在服务器运行 WebCompare，用本机浏览器查看。此路径无需 GTK / WebKit 桌面运行库。</p>
+          <div class="cli-steps">
+            <div class="cli-step install-step"><h4>01 · 安装到你的 Python 环境</h4><p>先激活自己的环境，再从源码或已有 wheel 中任选一种安装。</p>
+              <div class="install-options">
+                <div><p class="code-label">已有源码：在项目根目录运行</p><pre><code>python -m pip install -c requirements.lock .</code></pre><p class="command-note">首次从源码安装需要联网获取 Python 和前端构建依赖。</p></div>
+                <div><p class="code-label">已有 wheel：替换为实际下载的文件名</p><pre><code id="wheel-install-command">python -m pip install ./webcompare-版本-py3-none-any.whl</code></pre><div class="wheel-download"><a class="text-download" data-package="python-wheel" download aria-disabled="true" tabindex="-1">下载 Python wheel ↗</a><span data-package-info="python-wheel">正在检查附件…</span></div></div>
+              </div>
+            </div>
+            <div class="cli-step"><h4>02 · 在服务器启动，保持回环监听</h4><pre><code id="server-start-command">webcompare serve --host 127.0.0.1 --port 7865</code></pre><p class="command-note">默认也只监听 127.0.0.1:7865。保持此终端运行。</p></div>
+            <div class="cli-step"><h4>03 · 在本机终端建立 SSH 转发</h4><pre><code id="ssh-forward-command">ssh -N -L 7865:127.0.0.1:7865 user@server</code></pre><p class="command-note">将 user@server 换成你的服务器账号与地址，保持 SSH 连接。</p></div>
+          </div>
+          <p class="browser-address">然后在本机浏览器打开 <code>http://127.0.0.1:7865</code>。图片路径填写服务器上的目录；若就在本机运行，可直接打开该地址，无需 SSH 转发。</p>
+        </article>
+        <div class="option-heading"><span>可选桌面方式</span><span>Ubuntu 24.04 · x64 · 需图形桌面</span></div>
+        <div class="download-panel">
+          <article class="download-card native-card" aria-labelledby="linux-portable-title">
+            <div><div class="platform-title"><h3 id="linux-portable-title">桌面便携 TAR.GZ</h3><span class="recommended">系统已有运行库时</span></div><p class="option-note">解压到可写目录，运行 <code>./webcompare-desktop</code>。需要系统已有 GTK3 与 WebKitGTK 4.1；缺少这些库且没有 sudo 时，请用上方 Web 方式。</p></div>
+            <div><a class="secondary-download" data-package="linux-tar" download aria-disabled="true" tabindex="-1">下载 Linux 便携包 <svg aria-hidden="true"><use href="#icon-download"/></svg></a><p class="package-meta" data-package-info="linux-tar">正在检查附件…</p></div>
+          </article>
+          <article class="download-card system-option" aria-labelledby="linux-deb-title">
+            <div class="platform-title"><h3 id="linux-deb-title">有 sudo 时：DEB 安装或补齐依赖</h3><span class="system-badge">需要管理员权限</span></div>
+            <div class="system-columns"><div><p class="option-note">使用 DEB 可自动安装所需运行库，并添加应用菜单入口。</p><a class="text-download" data-package="linux-deb" download aria-disabled="true" tabindex="-1">下载 .deb 安装包 ↗</a><p class="package-meta" data-package-info="linux-deb">正在检查附件…</p><pre><code id="linux-install-command">sudo apt install ./webcompare-desktop_*_amd64.deb</code></pre></div><div><p class="option-note">使用便携包但缺少系统运行库时，可在 Ubuntu 24.04 安装以下依赖：</p><pre><code>sudo apt install gir1.2-gtk-3.0 gir1.2-webkit2-4.1 libgtk-3-0t64 libwebkit2gtk-4.1-0</code></pre></div></div>
+          </article>
+        </div>
+      </section>
+      <div class="download-caption"><p id="release-status" role="status">正在检查当前站点的发布附件…</p><a href="https://github.com/fenghansen/WebCompare/releases">GitHub Releases ↗</a><a data-checksums download aria-disabled="true" tabindex="-1">SHA-256 校验文件 ↗</a></div><noscript><p>启用 JavaScript 后可切换平台并查看当前站点的下载附件。</p></noscript>
+    </section>
+    <section class="setup" id="setup" aria-labelledby="setup-title">
+      <div><p class="section-tag">03 / GET STARTED</p><h2 id="setup-title">运行之后，开始比较。</h2><p class="setup-intro">浏览器与桌面窗口共用工作台，<br>从一个图片目录开始。</p></div>
+      <div class="setup-body">
+        <div class="step"><span class="step-num">01</span><div><h3>打开工作台</h3><p>CLI/Web 启动后在浏览器打开 <code>http://127.0.0.1:7865</code>；桌面版直接运行解压后的程序。已有在线服务也可<a href="../">直接进入</a>。</p></div></div>
+        <div class="step"><span class="step-num">02</span><div><h3>加入图片目录</h3><p>在“选图”中填写服务运行机器上的图片路径，打开后选择图片或添加整个目录，再加入另一组结果。SSH 转发连接服务器时，这里填写服务器路径。</p></div></div>
+        <div class="step"><span class="step-num">03</span><div><h3>同步查看细节</h3><p>进入比较视图，使用并排、叠图与差分，联动缩放到同一处细节。多个来源的结果可按分组切换，也可保存比较视图和分享链接。</p></div></div>
+        <details id="checksum-help"><summary>如何核对下载文件的 SHA-256？</summary><div class="checksum-content"><p>下载同目录下的 <a data-checksums download aria-disabled="true" tabindex="-1">SHA256SUMS</a>，将输出的哈希与对应文件记录比较。Windows 在下载目录打开 PowerShell：</p><pre><code id="windows-checksum-command">Get-FileHash .\webcompare-desktop-*-windows-x64.zip -Algorithm SHA256</code></pre><p style="margin-top:13px">Linux 在下载目录执行：</p><pre><code>sha256sum --check SHA256SUMS --ignore-missing</code></pre></div></details>
+      </div>
+    </section>
+  </main>
+  <footer class="wrap"><div class="footer-brand"><strong>WebCompare</strong><span>·</span> 让每一处细节都有据可比。</div><a href="../">在线工作台 ↗</a></footer>
+  <script src="assets/downloads-en.js"></script>
+  <script src="assets/downloads.js"></script>
+</body>
+</html>

@@ -1,0 +1,7 @@
+WebCompare
+Copyright 2026 fenghansen
+
+WebCompare includes third-party components under their respective licenses.
+Browser component notices are provided in frontend/public/licenses in source
+and the static/licenses directory of the application. Native desktop distributions
+include third-party notices, component versions and source information in licenses/.

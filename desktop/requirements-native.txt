@@ -1,0 +1,8 @@
+# Runtime additions; the application dependencies remain locked in requirements.lock.
+-r ../requirements.lock
+pywebview==6.2.1
+bottle==0.13.4
+proxy_tools==0.1.0
+# Python 3.12 / .NET Framework renderer. GTK bindings come from Ubuntu's system Python.
+pythonnet==3.0.5; sys_platform == 'win32'
+clr_loader==0.2.10; sys_platform == 'win32'

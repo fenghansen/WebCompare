@@ -1,0 +1,14 @@
+include LICENSE NOTICE webcompare_build.py
+include requirements.lock requirements-test.lock
+include install.sh install.bat start.sh start.bat scripts/install.py
+include frontend/package.json frontend/package-lock.json frontend/tsconfig.json frontend/index.html
+recursive-include frontend/src *
+recursive-include frontend/public *
+recursive-include frontend/dist *
+recursive-include webcompare/static *
+include README.md README.en.md
+include scripts/build_raw_native.py scripts/make_demo.py
+recursive-include examples *.webp
+include tests/test_smoke.py frontend/tests/state.test.mjs
+include tools/build_flow_data.py
+recursive-include desktop *.md *.txt *.json *.py *.spec *.c *.iss *.sh *.png *.svg *.ico GPL-3 LGPL-3 LGPL-2.1 MPL-2.0

@@ -1,0 +1,34 @@
+WebCompare Desktop — third-party licenses and source
+
+The same WebCompare release provides the corresponding source archive named
+webcompare-desktop-<version>-corresponding-source.tar.gz. It includes sources
+and build materials for the bundled libvips and its static dependencies,
+Paramiko, and the Ubuntu PyGObject and Pycairo used on Linux.
+
+Download the archive beside the matching desktop packages at
+https://github.com/fenghansen/WebCompare/releases
+
+The notices and licence texts for the bundled components are in this directory
+and the source archive. Paramiko and Ubuntu PyGObject are supplied under the
+GNU Lesser General Public License. For Pycairo see python3-cairo/copyright
+and the source archive. For libvips and the libraries linked inside it, see
+libvips-runtime/SOURCE.txt, the accompanying component notices, and the
+GNU LGPL, GNU GPL and Mozilla Public License texts in libvips-runtime.
+
+Close WebCompare before replacing a bundled library. Start from a separate
+copy of the extracted application, then use the same relative names:
+
+* Paramiko: edit or replace the Python files in _internal/paramiko.
+* PyGObject and Pycairo (Linux): edit or replace _internal/gi and
+  _internal/cairo. The native modules in those directories require a
+  compatible Ubuntu 24.04 x86_64 / CPython 3.12 build.
+* libvips: replace the actual libvips library in the portable application's
+  _internal directory, preserving the filename and ABI required by the
+  included _libvips extension. That includes the platform-specific wheel
+  directory/name shown in bundle-manifest.json.
+
+The source archive includes rebuild and replacement instructions. Stop the
+application and its background processes, then run the same executable
+from the modified copy. The terms of the covered libraries permit modifying
+them and reverse engineering the application's library interface to debug
+such modifications.

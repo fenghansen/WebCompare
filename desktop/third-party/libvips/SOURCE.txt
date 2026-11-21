@@ -1,0 +1,15 @@
+libvips runtime 8.18.6 and its statically linked dependencies
+
+The runtime libraries are the unmodified binary libraries distributed by
+pyvips-binary 8.18.6. Original upstream third-party notices and component
+versions are retained per platform, together with the referenced
+LGPLv3/GPLv3/MPL2 license texts. The wrapper MIT license is separate.
+
+Exact upstream runtime archives and SHA-256: provenance.json
+Source and build scripts: https://github.com/kleisauke/libvips-packaging/tree/v8.18.6
+libvips source: https://github.com/libvips/libvips/tree/v8.18.6
+pyvips-binary source: https://github.com/kleisauke/pyvips-binary/tree/v8.18.6
+
+Shared libraries remain separate from the application executable.
+ABI-compatible replacements can be placed in _internal/pyvips_binary.libs
+(Linux) or the corresponding bundled DLL directory (Windows).

@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools==84.2.1"]
+build-backend = "webcompare_build"
+backend-path = ["."]
+
+[project]
+name = "webcompare"
+version = "0.1.0"
+description = "A small self-hosted image group comparison service"
+readme = "README.md"
+authors = [{name = "fenghansen"}]
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+requires-python = ">=3.12"
+dependencies = ["fastapi>=0.115,<1", "uvicorn>=0.34,<1", "pyvips[binary]>=3.0,<4", "numpy>=2,<3", "paramiko>=5.1,<6"]
+
+[project.urls]
+Repository = "https://github.com/fenghansen/WebCompare"
+Releases = "https://github.com/fenghansen/WebCompare/releases"
+
+[project.optional-dependencies]
+test = ["pytest>=8,<10", "httpx>=0.28,<1"]
+# Retained for older install commands; RAW support is now a core dependency.
+raw = ["numpy>=2,<3"]
+
+[project.scripts]
+webcompare = "webcompare.cli:main"
+webcompare-ctl = "webcompare.control:main"
+
+[tool.setuptools]
+packages = ["webcompare"]
+
+[tool.setuptools.package-data]
+webcompare = ["native/*.c", "static/**/*", "static/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

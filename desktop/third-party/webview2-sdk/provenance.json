@@ -1,0 +1,20 @@
+{
+  "version": "1.0.3856.49",
+  "url": "https://api.nuget.org/v3-flatcontainer/microsoft.web.webview2/1.0.3856.49/microsoft.web.webview2.1.0.3856.49.nupkg",
+  "archive_sha256": "bc0f76eb911b569838dc4aa8f8d325269b966bedb592863d26211aef3a099f1a",
+  "matching_pywebview_6_2_1_files": {
+    "Microsoft.Web.WebView2.Core.dll": {
+      "sha256": "8219a3135436c147f8eb02fb831e99596103eebc18b6d7b794ca93f4c67018a2",
+      "official_nuget_members": [
+        "lib/net462/Microsoft.Web.WebView2.Core.dll",
+        "lib_manual/netcoreapp3.0/Microsoft.Web.WebView2.Core.dll"
+      ]
+    },
+    "Microsoft.Web.WebView2.WinForms.dll": {
+      "sha256": "c48f8d729dc531288d2c53a6241effe7922ed1b947850b2442008a945c098c48",
+      "official_nuget_members": [
+        "lib/net462/Microsoft.Web.WebView2.WinForms.dll"
+      ]
+    }
+  }
+}

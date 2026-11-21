@@ -1,0 +1,16 @@
+{
+  "libvips": "8.18.6",
+  "archives": {
+    "linux-x64": {
+      "url": "https://github.com/kleisauke/libvips-packaging/releases/download/v8.18.6/libvips-8.18.6-linux-x64.tar.gz",
+      "sha256": "c909ffed78b8b35da30cd32f8bd947c367b72c722a9a1292320b870988bfa5fd",
+      "bytes": 9967752
+    },
+    "win-x64": {
+      "url": "https://github.com/kleisauke/libvips-packaging/releases/download/v8.18.6/libvips-8.18.6-win-x64.tar.gz",
+      "sha256": "486157b3a41beb75a8e74256b495d7b380c1275bf1a3326a2d1e68478a0dec84",
+      "bytes": 8729802
+    }
+  },
+  "notes": "Original notice and exact component versions are retained separately for each platform."
+}

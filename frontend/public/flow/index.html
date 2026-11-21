@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <meta
+      name="description"
+      content="从启动、选图、渲染、分享、视频和上传六条场景，交互式理解 WebCompare 的模块、路径与数据流。"
+    />
+    <title>WebCompare · Flow_vis 项目导览</title>
+    <link rel="stylesheet" href="flow.css" />
+    <script src="flowdata.js" defer></script>
+    <script src="flow-en.js" defer></script>
+    <script src="flow.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#content">跳到导览内容</a>
+    <header class="site-header">
+      <a class="brand" href="#scenes" aria-label="WebCompare Flow_vis 首页">
+        <span class="brand-mark" aria-hidden="true"
+          ><i></i><i></i><i></i><i></i
+        ></span>
+        <strong>WebCompare</strong><span class="brand-divider">/</span
+        ><span>Flow_vis</span>
+      </a>
+      <div class="header-tools">
+        <span class="header-note">交互式项目导览</span>
+        <button type="button" id="language-toggle" lang="en">English</button>
+      </div>
+    </header>
+    <main id="content">
+      <section class="intro" aria-labelledby="page-title">
+        <div>
+          <p class="eyebrow">从使用场景，走进代码</p>
+          <h1 id="page-title">一次点击，<br />如何变成一张对比图？</h1>
+          <p class="intro-copy">
+            沿着请求走一遍，理解浏览器、路径授权、媒体进程和状态存储如何配合。选一个场景，从入口读到结果。
+          </p>
+        </div>
+        <div class="intro-note">
+          <span class="note-icon" aria-hidden="true">⌘</span>
+          <p>
+            <strong>先看流向，再找代码</strong
+            ><br />每一步都附有相对文件路径与符号，可复制后在源码仓库中查找。
+          </p>
+        </div>
+      </section>
+      <nav class="view-nav" aria-label="导览视图">
+        <button type="button" data-view="scenes" aria-pressed="true">
+          场景推演
+        </button>
+        <button type="button" data-view="architecture" aria-pressed="false">
+          模块关系
+        </button>
+        <button type="button" data-view="permissions" aria-pressed="false">
+          角色与路径
+        </button>
+        <button type="button" data-view="run" aria-pressed="false">
+          启动与开发
+        </button>
+        <button type="button" data-view="sources" aria-pressed="false">
+          源码索引
+        </button>
+      </nav>
+      <section id="view-scene" class="view" aria-label="场景推演">
+        <div class="scene-layout">
+          <aside class="scene-picker" aria-label="选择学习场景">
+            <p class="section-kicker">跟着一次操作走</p>
+            <div id="scene-list"></div>
+            <p class="aside-note">
+              这是代码导览。场景按钮只切换讲解，不会访问文件或执行真实操作。
+            </p>
+          </aside>
+          <div class="scene-content">
+            <div class="section-heading">
+              <div>
+                <p id="scene-tag" class="eyebrow"></p>
+                <h2 id="scene-title"></h2>
+              </div>
+              <span id="scene-mode" class="badge"></span>
+            </div>
+            <p id="scene-description" class="section-description"></p>
+            <div
+              id="scene-route"
+              class="scene-route"
+              role="group"
+              aria-label="流程步骤"
+            ></div>
+            <div class="playback">
+              <div class="playback-state">
+                <span id="step-count"></span><span id="step-name"></span>
+              </div>
+              <div class="playback-controls">
+                <button
+                  type="button"
+                  id="previous-step"
+                  class="step-button"
+                  aria-label="上一步"
+                >
+                  上一步</button
+                ><button
+                  type="button"
+                  id="play-scene"
+                  class="play-button"
+                  aria-pressed="false"
+                >
+                  自动演示</button
+                ><button
+                  type="button"
+                  id="next-step"
+                  class="step-button"
+                  aria-label="下一步"
+                >
+                  下一步
+                </button>
+              </div>
+            </div>
+            <article
+              id="step-detail"
+              class="step-detail"
+              aria-label="当前步骤详解"
+            ></article>
+            <div id="scene-takeaway" class="takeaway"></div>
+          </div>
+        </div>
+      </section>
+      <section id="view-architecture" class="view" aria-label="模块关系" hidden>
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">同一套代码，不同的职责</p>
+            <h2>把请求放回系统里</h2>
+          </div>
+          <span class="badge">点击模块查看职责与调用</span>
+        </div>
+        <p class="section-description">
+          连线表示主要调用或数据依赖，图中省略次要连接。选择一个模块，查看它接收什么、交给谁，以及该从哪里开始读。
+        </p>
+        <div class="architecture-layout">
+          <div id="module-map" class="module-map">
+            <svg id="module-links" aria-hidden="true"></svg>
+            <div id="module-nodes"></div>
+          </div>
+          <article
+            id="module-detail"
+            class="module-detail"
+            aria-label="模块详解"
+          ></article>
+        </div>
+      </section>
+      <section
+        id="view-permissions"
+        class="view"
+        aria-label="角色与路径"
+        hidden
+      >
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">先确定谁在读，再确定读哪里</p>
+            <h2>两种模式，两套路径语义</h2>
+          </div>
+        </div>
+        <div class="mode-switch" role="group" aria-label="运行模式">
+          <button type="button" data-mode="personal" aria-pressed="true">
+            Personal · 个人工作台</button
+          ><button type="button" data-mode="server" aria-pressed="false">
+            Server · 多人工作台
+          </button>
+        </div>
+        <div id="permissions-content"></div>
+      </section>
+      <section id="view-run" class="view" aria-label="启动与开发" hidden>
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">把导览连接到一次实际运行</p>
+            <h2>从安装到请求入口</h2>
+          </div>
+          <span class="badge">Python 3.12+ · Node.js 用于构建前端</span>
+        </div>
+        <div id="run-content"></div>
+      </section>
+      <section id="view-sources" class="view" aria-label="源码索引" hidden>
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">带着问题找代码</p>
+            <h2>文件与符号索引</h2>
+          </div>
+          <span id="source-count" class="badge"></span>
+        </div>
+        <label class="search-label" for="source-search"
+          >搜索文件、符号、模块或用途</label
+        >
+        <div class="search-box">
+          <span aria-hidden="true">⌕</span
+          ><input
+            type="search"
+            id="source-search"
+            placeholder="例如：缓存、Storage、viewer.ts"
+            autocomplete="off"
+          /><button type="button" id="clear-search" hidden>清空</button>
+        </div>
+        <p class="source-note">
+          以下是仓库相对路径，并非本站的网页地址。复制后可在编辑器中搜索文件与符号；行号随代码修订可能变化。
+        </p>
+        <div id="source-results" class="source-results"></div>
+      </section>
+      <noscript
+        ><p class="load-error">
+          请启用 JavaScript 以使用交互式导览。入口是 webcompare/cli.py 的
+          main，服务装配在 webcompare/app.py 的 create_app。
+        </p></noscript
+      >
+    </main>
+    <footer>
+      <span>WebCompare · Flow_vis</span
+      ><span>静态导览 · 无外部资源依赖 · 源码路径可复制</span>
+    </footer>
+    <p id="announcement" class="sr-only" role="status" aria-live="polite"></p>
+    <div id="toast" class="toast" role="status" hidden></div>
+  </body>
+</html>

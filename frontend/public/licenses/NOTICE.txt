@@ -1,0 +1,12 @@
+WebCompare 第三方软件说明
+
+Mediabunny 1.61.0
+Copyright (c) Vanilagy and contributors
+License: Mozilla Public License 2.0
+Upstream: https://github.com/Vanilagy/mediabunny
+未修改的库源码随本站提供：mediabunny-1.61.0-source.tar.gz
+许可证全文：mediabunny-MPL-2.0.txt
+本项目仅在视频模式按需加载该库，不包含额外编解码器插件。
+
+gif.js 0.2.0 及其编码器的版权与许可见 gif-js-notices.txt。
+Upstream: https://github.com/jnordberg/gif.js
