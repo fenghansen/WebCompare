@@ -2,7 +2,7 @@ import { applyLanguage, currentLanguage, languageKey, preferredLanguage, rawMess
 import './style.css';
 import { api, resetMediaErrors, setMediaErrorHandler, type Area, type BrowseResult, type Comparison, type DraftGroup, type Entry, type ExportRecord, type LinkShareRecord, type PageView, type PageViews, type Providers, type Quota, type RawSettings, type Role, type Root, type SelectionMode, type Session, type ShareRecord, type Source, type SSHConnection, type TemplateConfig, type ViewState, type Visibility } from './api';
 import { layoutOptions, layoutShape, validLayout, makeViewState, normalizeViewState, nextGroup, viewForShare, slotAssets, removeSlot, pageCount, pageInfo, orderedGroupIndices, groupLayout, cellsOf, smartLayout, displayImageIndices, sourceLanes, humanTtl, isRawPath, normalizeRawSettings, rawSettingsKey, imageDisplayQuality } from './state.js';
-import { checkVideo, disconnectRemoteVideos, rememberVideo, forgetVideos, videoExtensions, videoPoster } from './video';
+import { configureLocalDecoder, checkVideo, disconnectRemoteVideos, rememberVideo, forgetVideos, videoExtensions, videoPoster } from './video';
 import { Viewer } from './viewer';
 import { icon } from './icons';
 import { createSelectionHistory, selectPickerEntry, selectVisibleEntries, toggleVisibleEntries } from './picker-state.js';
@@ -18,11 +18,13 @@ const app=document.querySelector<HTMLDivElement>('#app')!;
 applyLanguage(currentLanguage(),false);
 let providers:Providers|null=null;
 let session:Session|null=null,comparison:Comparison|null=null,viewer:Viewer|null=null;
+let decoderChoice=localStorage.getItem('wc-video-decoder')==='browser'?'browser':'auto';
+let installingDecoder=false;
 const temporaryComparisons=new WeakSet<Comparison>();
 let shortcuts:Root[]=[],areas:Area[]=[],home='',browse:BrowseResult|null=null,selected:Source[]=[];
 let pendingBrowse:string|null=null;
 let mediaKind:'image'|'video'='image';
-let playing=false,playTimer=0,playSpeed=1,loopVideo=false;
+let playing=false,playTimer=0,playSpeed=1,loopVideo=false,playGeneration=0;
 let state=makeViewState() as ViewState;
 let rawDraft:RawSettings=normalizeRawSettings() as RawSettings,rawDraftKey='';
 let shareId=location.pathname.match(/^\/s\/([^/]+)$/)?.[1];
@@ -107,7 +109,7 @@ function observePoster(entry:Entry,card:HTMLElement) {
       const target=item.target as HTMLElement,entry=posterEntries.get(target)!;
       posterQueue=posterQueue.catch(()=>{}).then(async()=>{
         if(signal.aborted||!target.isConnected)return;
-        try{const poster=await videoPoster('/api/video?'+new URLSearchParams({path:entry.path}),signal);if(signal.aborted)return;posters.set(JSON.stringify([entry.path,entry.bytes,entry.mtime]),poster);while(posters.size>96)posters.delete(posters.keys().next().value!);display(target,poster,entry.name);}
+        try{const poster=await videoPoster('/api/video?'+new URLSearchParams({path:entry.path}),signal,personalMode());if(signal.aborted)return;posters.set(JSON.stringify([entry.path,entry.bytes,entry.mtime]),poster);while(posters.size>96)posters.delete(posters.keys().next().value!);display(target,poster,entry.name);}
         catch(e){if(!signal.aborted)target.title=(e as Error).message;}
       });
     }});posterObserver=observer;
@@ -118,6 +120,7 @@ function observePoster(entry:Entry,card:HTMLElement) {
 const isInput=(target:EventTarget|null)=>!!(target as HTMLElement)?.closest('input,select,textarea,[contenteditable=true]');
 const canBrowse=()=>!!session&&session.user.role!=='viewer'&&!shareId;
 const serverMode=()=>(session?.mode??providers?.mode)==='server';
+const personalMode=()=>(session?.mode??providers?.mode)==='personal';
 const canEditShare=()=>!!shareId&&shareEditable&&!!shareConfig&&session?.mode==='personal'&&['member','admin'].includes(session.user.role);
 function accountName(current:Session) {
   const {display_name:name,role,username}=current.user;
@@ -244,7 +247,9 @@ async function fullscreen() {
   immersive=view==='compare';paintImmersive();
   try{await app.requestFullscreen();}catch(e){if(!immersive)error(e);} // 嵌入浏览器拒绝原生全屏时保留网页沉浸。
 }
-function snapshot() {
+async function snapshot() {
+  const source=viewer,original=comparison;
+  if(mediaKind==='video'){stopVideo();await source?.settled();if(source!==viewer||original!==comparison)return;}
   viewer?.canvas.toBlob(blob=>{
     if(!blob)return;
     const a=el('a');a.href=URL.createObjectURL(blob);a.download=`webcompare-page-${state.group_index+1}.png`;a.click();
@@ -502,6 +507,7 @@ async function openShare() {
   }
 }
 function shell(preserveViewer=false) {
+  configureLocalDecoder(session?.local_nvdec && decoderChoice==='auto'?session.csrf:undefined);
   if(view!=='compare'&&immersive)void fullscreen();
   if(!preserveViewer){viewer?.destroy();viewer=null;}
   app.replaceChildren();
@@ -513,6 +519,7 @@ function shell(preserveViewer=false) {
   }
   // 页面操作追加在媒体模式右侧，切页时保持模式开关的位置。
   const mediaSwitch=segmented(t('媒体模式'),[['image',t('图像模式')],['video',t('视频模式')]],mediaKind,value=>void switchMedia(value as 'image'|'video'));mediaSwitch.classList.add('media-toggle');top.append(mediaSwitch);
+  if(mediaKind==='video')top.append(decoderControl());
   if(shareId)mediaSwitch.querySelectorAll('input').forEach(input=>input.disabled=true);
   if(canBrowse()||canEditShare()) {
     const toggle=btn('',()=>{if(shareId)void returnToSelection();else setView(view==='pick'?'compare':'pick');},'view-toggle');
@@ -561,8 +568,11 @@ function shell(preserveViewer=false) {
   uploadPanel();
   viewer??=new Viewer(update,status,session?.profile||'cloud',()=>{
     // 视频每帧解码完成也会通知这里；保留控制条节点，避免按下与松开之间按钮被移除。
-    if(mediaKind==='video'){if(!refreshVideoControls())toolbar();rail();}else toolbar();
-  },()=>{refreshRawMetadata();if(view==='compare')rail();},session?.local_images===true,session?.mode==='personal');main.querySelector('.canvas-wrap')!.append(viewer.canvas);
+    if(mediaKind==='video'){
+      if(playing&&viewer?.videoMemoryBlocked)stopVideo();
+      if(!refreshVideoControls())toolbar();rail();paintQualityStatus();
+    }else toolbar();
+  },()=>{refreshRawMetadata();if(view==='compare')rail();},session?.local_images===true,personalMode(),stopVideo);main.querySelector('.canvas-wrap')!.append(viewer.canvas);
   applyOverlays();paintImmersive();
   (window as unknown as {__viewer:Viewer}).__viewer=viewer;  // QA/调试探针
   if(providers?.native_desktop)watchDesktopUpdates();
@@ -595,49 +605,58 @@ async function switchMedia(next:'image'|'video') {
   browse=null;view='pick';shareId=undefined;++browseToken;history.replaceState(null,'','/');
   shell();render();if(path)await browseAt(path);
 }
-function stopVideo() { playing=false;clearTimeout(playTimer);refreshVideoControls(); }
+function stopVideo() { playing=false;viewer?.setVideoPlaying(false);++playGeneration;clearTimeout(playTimer);refreshVideoControls(); }
 function frameTarget(index:number) {
   const selected=viewer?.selectedIndex,info=viewer?.videoInfo()||[];
   if(selected!==null&&selected!==undefined&&info[selected]) {
-    const item=info[selected]!;update({video_offsets:{...state.video_offsets,[item.id]:Math.max(0,Math.min(item.count-1,index))-(state.video_frame||0)}});
+    const item=info[selected]!,video_frame=state.video_frame??0;
+    const offset=Math.max(0,Math.min(item.count-1,index))-video_frame;
+    update({video_frame,video_offsets:{...state.video_offsets,[item.key]:offset}});
   }else update({video_frame:Math.max(videoStart(),Math.min(videoLimit()-1,index))});
 }
-function videoStart() {return Math.max(0,...(viewer?.videoInfo()||[]).filter(Boolean).map(item=>-(state.video_offsets?.[item!.id]||0)));}
+function videoStart() {return Math.max(0,...(viewer?.videoInfo()||[]).filter(Boolean).map(item=>-item!.offset));}
 function videoLimit() {
   const items=(viewer?.videoInfo()||[]).filter(Boolean);
-  return Math.max(1,Math.min(...items.map(item=>item!.count-(state.video_offsets?.[item!.id]||0))));
+  return Math.max(1,Math.min(...items.map(item=>item!.count-item!.offset)));
 }
 function stepFrame(delta:number) {
   const selected=viewer?.selectedIndex,info=viewer?.videoInfo()||[];
+  if(viewer?.videoMemoryBlocked&&info.some(item=>item&&!item.count)){update({video_frame:state.video_frame||0});return;}
   frameTarget((selected!==null&&selected!==undefined?info[selected]?.frame||0:state.video_frame||0)+delta);
 }
-async function playNext() {
+async function playNext(generation=playGeneration,deadline=performance.now()) {
   if(!playing||!viewer)return;
-  await viewer.settled();if(!playing)return;
-  if((state.video_frame||0)>=videoLimit()-1){if(loopVideo){update({video_frame:videoStart()});playTimer=window.setTimeout(()=>void playNext(),100);return;}else{stopVideo();return;}}
-  const delay=viewer.videoDelay();update({video_frame:(state.video_frame||0)+1});
-  playTimer=window.setTimeout(()=>void playNext(),Math.max(16,delay/playSpeed));
+  await viewer.settled();if(!playing||!viewer||generation!==playGeneration)return;
+  if(viewer.videoMemoryBlocked){stopVideo();return;}
+  if((state.video_frame||0)>=videoLimit()-1){if(loopVideo){update({video_frame:videoStart()});playTimer=window.setTimeout(()=>void playNext(generation),100);return;}else{stopVideo();return;}}
+  const nextDeadline=Math.max(performance.now(),deadline+Math.max(16,viewer.videoDelay()/playSpeed));
+  update({video_frame:(state.video_frame||0)+1});
+  playTimer=window.setTimeout(()=>void playNext(generation,nextDeadline),Math.max(0,nextDeadline-performance.now()));
 }
 function videoControlState() {
-  const selected=viewer?.selectedIndex,info=viewer?.videoInfo()||[];
-  const item=(selected!==null&&selected!==undefined?info[selected]:null)||null;
+  const ids=slotAssets(comparison,state) as (string|null)[];
+  const selected=viewer?.selectedIndex??null,info=viewer?.videoInfo()||[];
+  const item=(selected===null?null:info[selected])||null;
   // 控件跟随目标帧；解码异步返回上一帧时，不应把用户正在输入的帧号回拨。
   const count=item?.count||videoLimit(),current=item
-    ?Math.max(0,Math.min(count-1,(state.video_frame||0)+(state.video_offsets?.[item.id]||0)))
+    ?Math.max(0,Math.min(count-1,item.frame))
     :state.video_frame||0;
-  return {selected,item,count,current,key:item?`${selected}:${item.id}`:'global'};
+  return {ids,selected,item,count,current,key:JSON.stringify(ids)};
 }
 /**
  * 播放推进、解码完成与手动移帧都在原位同步；同一选格不移除任何控制节点。
  * 这样 pointerdown/up 能落在同一个按钮，输入焦点与范围滑块的指针捕获也不会丢失。
- * 选格/视频身份变化才返回 false，由调用处重建所需的偏移输入等结构。
+ * 可见视频列表改变时才重建目标列表。
  */
-function refreshVideoControls():boolean {
+function refreshVideoControls(row=document.querySelector<HTMLElement>('.video-controls')):boolean {
   if(mediaKind!=='video'||view!=='compare')return false;
-  const row=document.querySelector<HTMLElement>('.video-controls');if(!row)return false;
-  const {item,count,current,key}=videoControlState();if(row.dataset.context!==key)return false;
+  if(!row)return false;
+  const {selected,item,count,current,key}=videoControlState();if(row.dataset.context!==key)return false;
+  const scope=row.querySelector<HTMLSelectElement>('.video-frame-target')!,value=selected===null?'':String(selected);
+  if(scope.value!==value)scope.value=value;
   const play=row.querySelector<HTMLButtonElement>('.video-play')!,caption=playing?t('暂停'):t('播放');
   if(play.textContent!==caption)play.textContent=caption;
+  play.title=playing?t('暂停全部视频'):t('播放全部视频，保留各路偏移');
   const frame=row.querySelector<HTMLInputElement>('.video-frame-index')!;
   frame.min=String(item?1:videoStart()+1);frame.max=String(count);
   if(document.activeElement!==frame)frame.value=String(current+1);
@@ -646,26 +665,47 @@ function refreshVideoControls():boolean {
   const seek=row.querySelector<HTMLInputElement>('.video-frame-progress')!;
   seek.min=String(item?0:videoStart());seek.max=String(Math.max(0,count-1));
   if(document.activeElement!==seek)seek.value=String(current);
-  const offset=row.querySelector<HTMLInputElement>('.video-frame-offset');
-  if(offset&&item&&document.activeElement!==offset)offset.value=String(state.video_offsets?.[item.id]||0);
+  const offset=row.querySelector<HTMLInputElement>('.video-frame-offset')!;
+  offset.parentElement!.hidden=!item;offset.disabled=!item?.count;
+  if(item&&document.activeElement!==offset)offset.value=String(item.offset);
   return true;
 }
 function videoControls() {
-  const row=el('div',undefined,'tool-row video-controls'),{selected,item,current,count,key}=videoControlState();
+  const row=el('div',undefined,'tool-row video-controls'),{ids,key}=videoControlState();
   row.dataset.context=key;
   row.setAttribute('aria-label',t('视频逐帧控制'));
-  const play=btn(playing?t('暂停'):t('播放'),()=>{if(playing)stopVideo();else{playing=true;viewer?.select(null);void playNext();}refreshVideoControls();},'video-play');
-  row.append(play,btn(t('上一帧'),()=>{stopVideo();stepFrame(-1);}),el('span',item?t`第 ${selected!+1} 格`:t('全局帧')));
-  const frame=el('input',undefined,'video-frame-index');frame.type='number';frame.min=String(item?1:videoStart()+1);frame.max=String(count);frame.value=String(current+1);frame.setAttribute('aria-label',t('视频帧号'));frame.onchange=()=>{
+  const scope=el('select',undefined,'video-frame-target');scope.setAttribute('aria-label',t('操作范围'));
+  scope.title=t('选择要移帧的视频，也可双击画格选路');
+  const all=el('option',t('全部联动'));all.value='';scope.append(all);
+  ids.forEach((id,index)=>{
+    if(!id)return;
+    const name=comparison?.assets[id]?.name;
+    const option=el('option',name?t`第 ${index+1} 路 · ${name}`:t`第 ${index+1} 路`);
+    option.value=String(index);scope.append(option);
+  });
+  scope.onchange=()=>viewer?.select(scope.value===''?null:Number(scope.value));
+  row.append(labelled(t('帧操作'),scope));
+  const play=btn(playing?t('暂停'):t('播放'),()=>{
+    if(playing)stopVideo();
+    else {
+      viewer?.select(null);playing=true;viewer?.setVideoPlaying(true);
+      if(viewer?.videoMemoryBlocked)update({video_frame:state.video_frame||0});
+      void playNext();
+    }
+    refreshVideoControls();
+  },'video-play');
+  row.append(play,btn(t('上一帧'),()=>{stopVideo();stepFrame(-1);}));
+  const frame=el('input',undefined,'video-frame-index');frame.type='number';frame.setAttribute('aria-label',t('视频帧号'));frame.onchange=()=>{
     // 失焦提交时先保存用户值；暂停同步控件可能写回当前播放帧，不能覆盖这次目标。
     const target=Number(frame.value)-1;stopVideo();frameTarget(target);frame.value=String(videoControlState().current+1);
   };
-  row.append(frame,el('span',`/ ${count||'…'}`, 'video-count'),btn(t('下一帧'),()=>{stopVideo();stepFrame(1);}));
-  const seek=el('input',undefined,'video-frame-progress');seek.type='range';seek.min=String(item?0:videoStart());seek.max=String(Math.max(0,count-1));seek.value=String(current);seek.setAttribute('aria-label',t('视频帧进度'));seek.onchange=()=>{const target=Number(seek.value);stopVideo();frameTarget(target);seek.value=String(videoControlState().current);};row.append(seek);
-  if(item){const offset=el('input',undefined,'video-frame-offset');offset.type='number';offset.value=String(state.video_offsets?.[item.id]||0);offset.setAttribute('aria-label',t('当前视频帧偏移'));offset.onchange=()=>{const target=(state.video_frame||0)+Number(offset.value);stopVideo();frameTarget(target);};row.append(labelled(t('偏移帧'),offset));}
+  row.append(frame,el('span',undefined,'video-count'),btn(t('下一帧'),()=>{stopVideo();stepFrame(1);}));
+  const seek=el('input',undefined,'video-frame-progress');seek.type='range';seek.setAttribute('aria-label',t('视频帧进度'));seek.onchange=()=>{const target=Number(seek.value);stopVideo();frameTarget(target);seek.value=String(videoControlState().current);};row.append(seek);
+  const offset=el('input',undefined,'video-frame-offset');offset.type='number';offset.setAttribute('aria-label',t('当前视频帧偏移'));offset.onchange=()=>{const target=(state.video_frame||0)+Number(offset.value);stopVideo();frameTarget(target);offset.value=String(videoControlState().item?.offset??0);};row.append(labelled(t('偏移帧'),offset));
   const speed=el('select');speed.setAttribute('aria-label',t('视频播放速度'));for(const rate of [.25,.5,1,2]){const option=el('option',rate+'×');option.value=String(rate);option.selected=rate===playSpeed;speed.append(option);}speed.onchange=()=>{playSpeed=Number(speed.value);};
   const loop=el('input');loop.type='checkbox';loop.checked=loopVideo;loop.onchange=()=>{loopVideo=loop.checked;};row.append(labelled(t('速度'),speed),labelled(t('循环'),loop));
-  row.append(btn(t('帧对齐归零'),()=>{stopVideo();update({video_frame:0,video_offsets:{}});}),el('span',t('双击一格后可单独移帧；取消选中后全局联动'),'muted'));
+  row.append(btn(t('帧对齐归零'),()=>{stopVideo();update({video_frame:0,video_offsets:{}});}));
+  refreshVideoControls(row);
   return row;
 }
 function render(updateViewer=true) {
@@ -705,7 +745,11 @@ function rawAsset(id:string) { const asset=comparison?.assets[id];return isRawPa
 function currentPageHasRaw() { return mediaKind==='image'&&slotAssets(comparison,state).some((id:string|null)=>id&&rawAsset(id)); }
 function paintQualityStatus() {
   const quality=document.querySelector('.quality-status');if(!quality)return;
-  if(mediaKind==='video'){quality.textContent=t('浏览器解码帧 · RGB 显示值 · 原视频不展开');return;}
+  if(mediaKind==='video'){
+    refreshDecoderControls();
+    quality.textContent=t('按原片时间戳对齐 · RGB 显示值');
+    return;
+  }
   const choices=new Set(slotAssets(comparison,state).filter(Boolean).map((id:string)=>imageDisplayQuality(state.quality,session?.local_images===true,comparison?.assets[id]?.path)));
   const description=choices.size>1?t('本地无损 · SSH 高清'):choices.has('exact')?t('无损 · 本地缩放和平移'):t('完整分辨率 · 高清压缩 · 本地缩放和平移');
   quality.textContent=(currentPageHasRaw()?t('RAW 显示 RGB · '):'')+(state.quality==='auto'?t('自适应 · '):'')+description;
@@ -1084,7 +1128,7 @@ async function checkImage(item:UploadItem,maxPixels:number) {
 async function uploadFiles(files:File[],folder=false) {
   if(!files.length||pendingBrowse!==null||busy||uploadActive()||!session||session.user.role==='guest'||!browse||!writableHere(browse.path))return;
   if(!folder&&(browse.root_only_folders||browse.path==='member')){error(t('成员区根目录只可创建文件夹，请先打开自己的文件夹。'));return;}
-  const csrf=session.csrf,maxPixels=session.limits.max_pixels||Infinity;
+  const csrf=session.csrf,maxPixels=session.limits.max_pixels??Infinity;
   const job:UploadJob={dir:browse.path,media:mediaKind,concurrency:uploadConcurrency(session.profile),items:files.map(file=>({file,path:folder?file.webkitRelativePath:file.name,state:'pending',loaded:0})),bytes:files.reduce((sum,file)=>sum+file.size,0),sent:0,success:0,failed:0,active:new Set(),checked:0,phase:'checking',message:'正在核对全部文件，核对通过后请确认上传。',controller:new AbortController(),collapsed:false};
   uploadJob=job;clearError();uploadPanel();picker();
   const names=new Set<string>();
@@ -1565,19 +1609,22 @@ function rail() {
     search.oninput=()=>{groupSearch=search.value;rail();};box.append(search,list,el('div',state.grouping==='within'?t('当前组图片'):t('当前序号各组'),'section-title rail-title'));list.scrollTop=groupScroll;
     if(focused){search.focus();if(caret!==null)search.setSelectionRange(caret,caret);}
   }
+  const videoInfo=comp.media_kind==='video'?viewer?.videoInfo():null;
   ids.forEach((id,i)=>{
     const item=el('div',undefined,'lane'+(state.mode==='diff'&&state.diff_base===i?' diff-base':'')),thumb=el('div',undefined,'lane-thumb');item.dataset.railSlot=String(i);
     if(id){const poster=viewer?.thumbnail(id,i);if(poster)thumb.append(poster);else if(comp.media_kind==='video')thumb.append(el('span','▶'));}
-    if(id&&comp.media_kind==='video'){const info=viewer?.videoInfo().find(item=>item?.id===id);if(info)thumb.title=t`第 ${info.frame+1} / ${info.count} 帧`;}
+    const info=videoInfo?.[i];
+    if(info&&info.id===id)thumb.title=t`第 ${info.frame+1} / ${info.count} 帧`;
     item.append(thumb);const asset=id?comp.assets[id]:null,sourceIndex=comp.groups?.length?start+i:display[start+i];
     const group=comp.groups?.[state.grouping==='within'?page.groupIndex:indices[i]],sortable=!!id&&sourceIndex>=0&&canBrowse()&&!comp.groups?.length&&!state.natural_sort&&!pending;
     const name=el('div',group?`${i+1} · ${group.label} · ${asset?.name||t('缺图')}`:`${start+i+1} · ${asset?.name||t('缺图')}`,'lane-name');name.title=asset?.path||'';item.append(name);item.title=(asset?.path||'')+(sortable?t('\n按住并拖到实线处调整顺序，松手后生效。拖动按当前显示顺序重排，并结束序列转置。'):'');
-    register(item,comp.groups?.length?`asset:${group?railGroupKey(group):'missing'}:${i}:${id||'empty'}`:`asset:${id||sourceIndex}`,'asset',sourceIndex,sortable);box.append(item);
+    register(item,comp.groups?.length?`asset:${group?railGroupKey(group):'missing'}:${i}:${id||'empty'}`:`asset:${info&&info.id===id?info.key:id||sourceIndex}`,'asset',sourceIndex,sortable);box.append(item);
   });
   box.scrollTop=scroll;railDrag.sync(items,context,`${session?.user.id||''}:${comp.id}`);railDrag.animateFrom(previous);
 }
-function showGif() {
-  stopVideo();
+async function showGif() {
+  const source=viewer,original=comparison;
+  if(mediaKind==='video'){stopVideo();await source?.settled();if(source!==viewer||original!==comparison)return;}
   if(!comparison||!viewer)return;
   const cells=viewer.snapshotCells();
   if(cells.length<2){error(t('当前页只有一张图，无需导出 GIF'));return;}
@@ -1787,7 +1834,7 @@ function toolbar() {
   // 由外层用最新 state 完成一次构建，避免重入后重复追加整套工具与帧控制。
   if(buildingToolbar)return;
   buildingToolbar=true;
-  try{buildToolbar();}finally{buildingToolbar=false;}
+  try{buildToolbar();if(mediaKind==='video')paintQualityStatus();}finally{buildingToolbar=false;}
 }
 function buildToolbar() {
   const bar=document.querySelector('.toolbar')!;bar.replaceChildren();
@@ -1836,23 +1883,26 @@ function buildToolbar() {
   const custom=el('option',t('自定义行列…'));custom.value='custom';layout.append(custom);
   layout.onchange=()=>{if(layout.value==='custom'){layout.value=state.layout;showCustomLayout(groupCount);}else update({layout:layout.value as ViewState['layout']});};
   modes.insertBefore(labelled(t('布局'),layout),modes.children[3]||null);
-  const selection=el('select');selection.setAttribute('aria-label',t('操作范围'));selection.title=t('双击图像框选中或取消；选中后缩放、拖动仅联动选中格与鼠标所在格');
-  const all=el('option',t('全部图像'));all.value='';selection.append(all);
-  slotAssets(comparison,state).forEach((id:string|null,index:number)=>{if(id){const option=el('option',t`第 ${index+1} 格`);option.value=String(index);selection.append(option);}});
-  selection.value=viewer?.selectedIndex===null||viewer?.selectedIndex===undefined?'':String(viewer.selectedIndex);
-  selection.onchange=()=>viewer?.select(selection.value===''?null:Number(selection.value));
-  transforms.append(labelled(t('操作'),selection),iconButton(t('旋转 90°'),'rotate',()=>viewer?.rotate(),'',t('顺时针旋转选中图像；未选中时旋转全部图像')),iconButton(t('左右翻转'),'flip-x',()=>viewer?.flip('x'),'',t('沿屏幕水平方向镜像')),iconButton(t('上下翻转'),'flip-y',()=>viewer?.flip('y'),'',t('沿屏幕垂直方向镜像')));
+  if(mediaKind==='image'){
+    const selection=el('select');selection.setAttribute('aria-label',t('操作范围'));selection.title=t('双击图像框选中或取消；选中后缩放、拖动仅联动选中格与鼠标所在格');
+    const all=el('option',t('全部图像'));all.value='';selection.append(all);
+    slotAssets(comparison,state).forEach((id:string|null,index:number)=>{if(id){const option=el('option',t`第 ${index+1} 格`);option.value=String(index);selection.append(option);}});
+    selection.value=viewer?.selectedIndex===null||viewer?.selectedIndex===undefined?'':String(viewer.selectedIndex);
+    selection.onchange=()=>viewer?.select(selection.value===''?null:Number(selection.value));
+    transforms.append(labelled(t('操作'),selection));
+  }
+  transforms.append(iconButton(t('旋转 90°'),'rotate',()=>viewer?.rotate(),'',t('顺时针旋转选中图像；未选中时旋转全部图像')),iconButton(t('左右翻转'),'flip-x',()=>viewer?.flip('x'),'',t('沿屏幕水平方向镜像')),iconButton(t('上下翻转'),'flip-y',()=>viewer?.flip('y'),'',t('沿屏幕垂直方向镜像')));
   transforms.append(iconButton(t('对齐位置'),'position',()=>viewer?.align(false),'',t('以选中图像或第一张图为参考，对齐左上角，保持各图显示大小')),iconButton(t('对齐大小'),'size',()=>viewer?.align(true),'',t('以选中图像或第一张图为参考，复制显示位置和宽高')));
   const brightnessOn=state.brightness_ref!==null;
   const brightness=iconButton(t('对齐亮度'),'brightness',()=>update({brightness_ref:brightnessOn?null:viewer?.selectedIndex??0}),brightnessOn?'tool-active':'',mediaKind==='video'?t('仅支持图像'):brightnessOn?t`已按第 ${state.brightness_ref!+1} 格的全图 p99 对齐；参考格缺图时使用首张图；点击恢复`:t('以选中格或第 1 格的全图 p99 对齐当前页亮度；再次点击恢复'));
   brightness.disabled=mediaKind==='video';brightness.setAttribute('aria-pressed',String(brightnessOn));transforms.append(brightness);
   const channel=el('select');channel.setAttribute('aria-label',t('通道'));['rgb','r','g','b'].forEach(v=>{const o=el('option',v.toUpperCase());o.value=v;o.selected=state.channel===v;channel.append(o);});channel.onchange=()=>update({channel:channel.value as ViewState['channel']});
   secondary.append(labelled(t('通道'),channel));
-  secondary.append(iconButton(t('直方图'),'histogram',event=>{histogramOn=viewer?.toggleHistogram()??false;(event?.currentTarget as HTMLButtonElement)?.classList.toggle('tool-active',histogramOn);},histogramOn?'tool-active':'',t('基于当前已解码的预览位图现场统计 RGB 直方图，不额外请求网络')));
+  secondary.append(iconButton(t('直方图'),'histogram',event=>{histogramOn=viewer?.toggleHistogram()??false;(event?.currentTarget as HTMLButtonElement)?.classList.toggle('tool-active',histogramOn);},histogramOn?'tool-active':'',mediaKind==='video'?t('从完整视频帧采样 RGB 直方图'):t('基于当前已解码的预览位图现场统计 RGB 直方图，不额外请求网络')));
   secondary.append(el('span',undefined,'separator'),iconButton(t('0 适应'),'fit',()=>viewer?.fit(),'',t('完整显示选中图像；未选中时适应全部图像，保持纵横比')),iconButton(t('F 填满'),'fill',()=>viewer?.fill(),'',t('选中图像或全部图像铺满图框，纵横比不同时居中裁边')),iconButton(t('1 原像素'),'pixel',()=>viewer?.oneToOne(),'',t('选中图像或全部图像，一个原图像素对应一个屏幕像素')));
   const quality=el('select');quality.setAttribute('aria-label',t('画质'));
   for(const [value,label] of [['auto',t('自适应')],['exact',t('无损')],['high',t('高清')]] as const){const option=el('option',label);option.value=value;option.selected=state.quality===value;quality.append(option);}
-  quality.onchange=()=>update({quality:quality.value as ViewState['quality']});if(mediaKind==='image')secondary.append(labelled(t('画质'),quality));else secondary.append(el('span',t('视频原分辨率'),'muted'));
+  quality.onchange=()=>update({quality:quality.value as ViewState['quality']});if(mediaKind==='image')secondary.append(labelled(t('画质'),quality));
   const edge=el('label',undefined,'icon-check');const edgeBox=el('input');edgeBox.type='checkbox';edgeBox.checked=edgeDiff;edgeBox.onchange=()=>{edgeDiff=edgeBox.checked;viewer?.setEdgeDiff(edgeDiff);};edgeBox.setAttribute('aria-label',t('边缘差分'));edge.append(edgeBox,icon('edge'));
   edge.title=t('边缘差分 · 按住叠图时，无邻槽可覆盖的边缘槽默认保持原图；勾选后显示与内侧邻居的绝对差分');overlays.append(edge);
   if(canBrowse())exports.append(iconButton(t('分享'),'share',showShare,'',t('生成分享链接，保存当前页码、布局和查看参数')));
@@ -2068,9 +2118,89 @@ function showShare() {
   box.append(el('div',t('我的分享'),'section-title side-section'));
   const mine=shareList(box);
 }
+function decoderSetup() {
+  return session?.nvdec_setup ?? (session?.local_nvdec?'ready':undefined);
+}
+
+function selectDecoder(value: string) {
+  decoderChoice=value;localStorage.setItem('wc-video-decoder',value);
+  configureLocalDecoder(value==='auto'&&session?.local_nvdec?session.csrf:undefined);
+  if(view==='compare' && mediaKind==='video' && viewer) {
+    stopVideo();
+    viewer.suspend();
+    viewer.update(comparison,state,shareId);
+  }
+  refreshDecoderControls();
+}
+
+async function installDecoder() {
+  const owner=session;
+  if(!owner || installingDecoder || decoderSetup()!=='installable')return;
+  installingDecoder=true;
+  refreshDecoderControls();
+  const initialChoice=decoderChoice;
+  try {
+    await api.installNVDEC(owner.csrf);
+    if(session!==owner)return;
+    owner.local_nvdec=true;owner.nvdec_setup='ready';
+    if(initialChoice===decoderChoice)selectDecoder('auto');
+    info(t('本机硬解已安装'));
+  } catch(e) {if(session===owner)error(e);}
+  finally {installingDecoder=false;refreshDecoderControls();}
+}
+
+function decoderControl() {
+  const group=el('div',undefined,'decoder-control');
+  const setup=decoderSetup();
+  if(setup!=='ready' && setup!=='installable') {
+    const result=el('span',t('浏览器解码'),'decoder-browser');
+    result.title=setup==='no_gpu'?t('本机未检测到可用的 NVIDIA 驱动或显卡'):
+      setup==='disabled'?t('管理员已关闭本机硬解'):
+      setup==='unsupported'?t('此运行环境使用浏览器解码，可在服务环境手动安装兼容的 PyAV'):t('视频由当前浏览器解码');
+    group.append(result);return group;
+  }
+  const select=el('select',undefined,'video-decoder-choice');
+  select.setAttribute('aria-label',t('视频解码'));
+  select.title=t('自动优先本机 NVIDIA 硬解，每路可独立回退到浏览器。切换时暂停并保留当前帧。');
+  for(const [value,text] of [['auto',t('自动')],['browser',t('仅用浏览器')]]) {
+    const option=el('option',text);option.value=value;select.append(option);
+  }
+  select.onchange=()=>selectDecoder(select.value);
+  group.append(labelled(t('解码'),select));
+  if(setup==='installable')group.append(btn(t('安装并启用硬解'),()=>void installDecoder(),'decoder-install',t('从 PyPI 下载 PyAV（约 28–35 MB），安装后即可使用')));
+  paintDecoderGroup(group,autoDecoderLabel());return group;
+}
+
+function autoDecoderLabel() {
+  const lanes=view==='compare' && mediaKind==='video' ? viewer?.videoInfo().filter(item=>item?.count)||[] : [];
+  const hardware=lanes.filter(item=>item?.decoder==='NVDEC').length;
+  if(hardware)return t`自动 · NVDEC 硬解 ${hardware}/${lanes.length}`;
+  if(lanes.some(item=>item?.fallback))return t('自动 · 已回退浏览器');
+  return decoderSetup()==='ready' && !lanes.length?t('自动 · 优先硬解'):t('自动 · 浏览器解码');
+}
+
+function paintDecoderGroup(group:Element,automatic:string) {
+  const select=group.querySelector<HTMLSelectElement>('.video-decoder-choice');
+  if(!select)return;
+  if(select.options[0].text!==automatic)select.options[0].text=automatic;
+  if(select.value!==decoderChoice)select.value=decoderChoice;
+  const install=group.querySelector<HTMLButtonElement>('.decoder-install');
+  if(install){
+    if(decoderSetup()==='ready'){install.remove();return;}
+    install.disabled=installingDecoder;
+    install.textContent=installingDecoder?t('安装中…'):t('安装并启用硬解');
+  }
+}
+
+function refreshDecoderControls() {
+  const automatic=autoDecoderLabel();
+  document.querySelectorAll('.decoder-control').forEach(group=>paintDecoderGroup(group,automatic));
+}
+
 async function settings() {
   const box=dialog(t('设置'));box.classList.add('settings-dialog');
   box.append(languageControl());
+  if(session?.nvdec_setup || session?.local_nvdec)box.append(decoderControl());
   const licenses=el('a',t('第三方软件与开源许可'));licenses.href='/licenses/NOTICE.txt';licenses.target='_blank';licenses.rel='noopener';box.append(licenses);
   const display=el('div',undefined,'display-settings');
   const showNames=el('input');showNames.type='checkbox';showNames.checked=overlayOptions.titles;showNames.setAttribute('aria-label',t('显示文件名'));
@@ -2103,8 +2233,10 @@ async function settings() {
 }
 window.addEventListener('keydown',e=>{
   if(e.key==='Escape'&&immersive&&!document.querySelector('.dialog-backdrop')){e.preventDefault();void fullscreen();return;}
-  if(isInput(e.target)||!comparison||view!=='compare'||document.querySelector('.dialog-backdrop'))return;
   const key=e.key.toLowerCase();
+  if(!comparison||view!=='compare'||document.querySelector('.dialog-backdrop'))return;
+  const frameTargetShortcut=(e.target as Element|null)?.classList?.contains('video-frame-target')&&[',','.','escape'].includes(key);
+  if(isInput(e.target)&&!frameTargetShortcut)return;
   if(mediaKind==='video'&&(key===','||key==='.')){e.preventDefault();stopVideo();stepFrame(key===','?-1:1);return;}
   if(key==='escape'){viewer?.select(null);return;}
   if(key==='f'&&e.shiftKey){e.preventDefault();void fullscreen();return;}

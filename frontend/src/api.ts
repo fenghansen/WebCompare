@@ -8,8 +8,9 @@ export type Area = { id: string; label: string; path: string; writable: boolean 
 export type Workspace = { id: string; quota_bytes: number; content_ttl_seconds: number; exit_ttl_seconds: number; idle_ttl_seconds: number };
 export type Session = {
   user: { id: string; username: string; display_name: string; role: Role };
-  csrf: string; profile: 'cloud' | 'intranet'; mode: Mode; login_required: boolean; local_images?: boolean;
-  limits: { max_pixels: number; max_sources: number; max_files_per_source: number };
+  csrf: string; profile: 'cloud' | 'intranet'; mode: Mode; login_required: boolean; local_images?: boolean; local_nvdec?: boolean;
+  nvdec_setup?: 'ready' | 'installable' | 'no_gpu' | 'disabled' | 'unsupported';
+  limits: { max_pixels: number | null; max_sources: number; max_files_per_source: number };
   workspace?: Workspace;
 };
 export type Providers = { mode: Mode; guest: boolean; local: boolean; login_required: boolean; guest_max_workspaces?: number; native_desktop?: boolean };
@@ -158,6 +159,8 @@ function uploadPost<T>(path:string,body:Blob,csrf:string|undefined,fallback:(sta
 }
 
 export const api = {
+  installNVDEC: (csrf: string) => request<{status:'ready'}>('/api/local/nvdec/install', {method:'POST', headers:{'X-CSRF-Token':csrf}}),
+  personalMemory: () => request<{ available_bytes: number | null }>('/api/personal/memory', { cache: 'no-store' }),
   providers: () => request<Providers>('/api/auth/providers'),
   login: async (username: string, password: string) => {
     try { return await request<Session>('/api/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) }); }

@@ -9,6 +9,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, StrictInt, field_validator
 
+MAX_SAFE_INTEGER = 2**53 - 1  # JavaScript Number 的安全整数上限。
+
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
@@ -142,8 +144,10 @@ class ViewState(StrictModel):
     raw: RawOptions = Field(default_factory=RawOptions)
     view: ViewRect | None = None
     panels: list[PanelState] = Field(default_factory=list, max_length=64)
-    video_frame: int = Field(default=0, ge=0, le=500000)
-    video_offsets: dict[str, Annotated[StrictInt, Field(ge=-500000, le=500000)]] = Field(default_factory=dict, max_length=500)
+    video_frame: int = Field(default=0, ge=0, le=MAX_SAFE_INTEGER)
+    video_offsets: dict[str, Annotated[StrictInt, Field(ge=-MAX_SAFE_INTEGER, le=MAX_SAFE_INTEGER)]] = Field(
+        default_factory=dict, max_length=500
+    )
 
     @field_validator("layout")
     @classmethod

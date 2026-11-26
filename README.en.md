@@ -12,17 +12,27 @@ I vibe-coded WebCompare for my own low-level vision research. The idea was to bu
 
 ![Six views of the same chart: reference, noise, blur, mosaic, grayscale and low light.](examples/screenshots/compare.webp)
 
-## Try it with six images
+## Image comparison
 
 The workbench starts in Chinese. Open **设置 → 语言** and choose **English**. On desktop, open **Settings → Software updates** to check for a new release.
 
-In Personal mode, open `examples/calibration` in the file picker. Switch to thumbnails, select the six images in filename order, and open a **2 × 3** comparison.
+Start WebCompare and open `examples/calibration` in the file picker. Switch to thumbnails, select the six images in filename order, and open a **2 × 3** comparison.
 
 ![The Personal file picker with all six demo images selected.](examples/screenshots/picker.webp)
 
 Choose the first image as the difference reference and set the gain to **2**. Blur lights up the chart edges. The mosaic leaves steps along diagonal lines. The grayscale image changes only the colors, so the neutral gray patches stay black in its difference view.
 
 ![Absolute RGB differences against the top-left reference.](examples/screenshots/difference.webp)
+
+## Video comparison
+
+In the top-left corner of the workbench, switch to **Video mode**. Open `examples/video` and select the four MP4 files in filename order. Open a **2 × 2** comparison. The sample places a subject from VideoMatte240K in a simple room with a window and floor. The four tiles show the composited `RGB` clip, the alpha matte `α`, `RGB × α`, and `RGB × (1 − α)`. Each clip has 15 frames and runs for one second. 【[Sample sources and processing](examples/video/README.md)】
+
+Press **Play** to view all four clips in sync. Pause to enter a frame number, step through frames or use the progress slider. Double-click a tile to step through that clip independently. Zoom, pixel inspection and difference views work on the current frame.
+
+![The Personal video workbench showing four matting clips](examples/screenshots/video.png)
+
+Personal uses available resources for images and video, including source-resolution media. Use a browser with WebCodecs over HTTPS or a loopback address. On a local NVIDIA system, the **Decoder** menu can enable NVDEC. Clips that fail to decode there fall back to the browser. [Video comparison guide](https://github.com/fenghansen/WebCompare/wiki/Comparison#compare-four-videos)
 
 ## Installation and launch
 
@@ -63,8 +73,6 @@ Choose your platform on the [Releases page](https://github.com/fenghansen/WebCom
 
 - **Windows** — Download the portable x64 ZIP, extract the whole folder and open `WebCompare.exe`. Choose Setup if you want a Start menu shortcut.
 - **Linux** — On a desktop with GTK3 and WebKitGTK 4.1, unpack the tar.gz and run `./webcompare-desktop`. You can also install the DEB with sudo. For browser-only use, install the release wheel in your Python environment and run `webcompare serve`.
-
-Frame-by-frame video comparison is experimental and still awaits hands-on testing by the author.
 
 ## Command line
 

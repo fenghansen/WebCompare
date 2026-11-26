@@ -9,6 +9,9 @@ recursive-include webcompare/static *
 include README.md README.en.md
 include scripts/build_raw_native.py scripts/make_demo.py
 recursive-include examples *.webp
-include tests/test_smoke.py frontend/tests/state.test.mjs
+include examples/screenshots/video.png
+recursive-include examples/video *.mp4 README.md LICENSE
+include tests/test_smoke.py tests/test_host_memory.py tests/test_nvdec.py
+recursive-include frontend/tests *.test.mjs
 include tools/build_flow_data.py
 recursive-include desktop *.md *.txt *.json *.py *.spec *.c *.iss *.sh *.png *.svg *.ico GPL-3 LGPL-3 LGPL-2.1 MPL-2.0

@@ -35,6 +35,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .host_memory import MEMORY_RESERVE_BYTES, available_memory_bytes
 from .image_formats import IMAGE_FORMATS, is_animated_webp
 
 try:  # pragma: no cover - 仅非 POSIX 平台走这里
@@ -149,7 +150,13 @@ def _worker_apply_limits(*, memory_limit: bool = True) -> None:
             logging.getLogger(__name__).warning("媒体 worker 无法设置 %s: %s", name, exc)
 
 
-def _worker_main(requests: Any, results: Any, max_pixels: int, vips_tmp_dir: str,
+def _check_image_memory(required: int = 0) -> None:
+    available = available_memory_bytes()
+    if available is not None and available - required < MEMORY_RESERVE_BYTES:
+        raise _WorkerMediaError("可用物理内存不足，继续处理将低于 512 MiB 预留。释放内存后重试。", "MEMORY_PRESSURE", 507)
+
+
+def _worker_main(requests: Any, results: Any, max_pixels: int | None, vips_tmp_dir: str,
                  sandbox_mode: str | None = None, personal: bool = False) -> None:
     """功能说明：媒体 worker 子进程的主循环，独占 libvips 并串行处理解码请求。
 
@@ -230,6 +237,8 @@ def _worker_main(requests: Any, results: Any, max_pixels: int, vips_tmp_dir: str
             return
         request_id, command, payload = request
         try:
+            if max_pixels is None and command in {"validate", "pixel", "render"}:
+                _check_image_memory()
             if command == "raw_convert":
                 results.put((request_id, _worker_raw_convert(pyvips, payload, max_pixels), None))
             elif command == "metadata":
@@ -296,7 +305,7 @@ def _loader_format(image: Any, path: str) -> str:
     raise _WorkerMediaError("only PNG, JPEG and WebP images are supported", "UNSUPPORTED_FORMAT", 422)
 
 
-def _load_image(pyvips: Any, path: str, max_pixels: int, *, access: str = "sequential", raw_metadata: dict | None = None) -> tuple[Any, dict[str, Any]]:
+def _load_image(pyvips: Any, path: str, max_pixels: int | None, *, access: str = "sequential", raw_metadata: dict | None = None) -> tuple[Any, dict[str, Any]]:
     try:
         image = pyvips.Image.new_from_file(path, access=access, fail=True)
     except BaseException as exc:
@@ -312,7 +321,7 @@ def _load_image(pyvips: Any, path: str, max_pixels: int, *, access: str = "seque
         raise _WorkerMediaError("CMYK JPEG is not supported", "UNSUPPORTED_FORMAT", 422)
     if image.format != "uchar":
         raise _WorkerMediaError("only 8-bit PNG/JPEG/WebP images are supported", "UNSUPPORTED_BIT_DEPTH", 422)
-    if image.width <= 0 or image.height <= 0 or image.width * image.height > max_pixels:
+    if image.width <= 0 or image.height <= 0 or (max_pixels is not None and image.width * image.height > max_pixels):
         raise _WorkerMediaError("image exceeds the pixel limit", "PIXEL_LIMIT", 422)
     if image.bands not in {1, 2, 3, 4}:
         raise _WorkerMediaError("unsupported image channels", "UNSUPPORTED_FORMAT", 422)
@@ -327,7 +336,7 @@ def _load_image(pyvips: Any, path: str, max_pixels: int, *, access: str = "seque
         # Older libvips builds may not provide autorot; the decoded image is
         # still usable, but normal modern builds always take this path.
         pass
-    if image.width * image.height > max_pixels:
+    if max_pixels is not None and image.width * image.height > max_pixels:
         raise _WorkerMediaError("image exceeds the pixel limit", "PIXEL_LIMIT", 422)
     source_bands = int(image.bands)
     has_alpha = source_bands in {2, 4}
@@ -398,7 +407,7 @@ def _resize(image: Any, max_size: int) -> Any:
     return image.resize(float(max_size) / largest, kernel="lanczos3")
 
 
-def _worker_raw_convert(pyvips: Any, payload: dict[str, Any], max_pixels: int) -> dict[str, Any]:
+def _worker_raw_convert(pyvips: Any, payload: dict[str, Any], max_pixels: int | None) -> dict[str, Any]:
     """Decode RAW once into a lossless native VIPS cache, with no PNG encode."""
     from .raw import demosaic_bilinear, load_raw_array
 
@@ -406,9 +415,14 @@ def _worker_raw_convert(pyvips: Any, payload: dict[str, Any], max_pixels: int) -
     _worker_check_stat(source, expected)
     metadata = payload["raw_metadata"]
     width, height = metadata["width"], metadata["height"]
-    if width * height > max_pixels:
+    if max_pixels is not None and width * height > max_pixels:
         raise _WorkerMediaError("RAW exceeds the pixel limit", "PIXEL_LIMIT", 422)
     resolved = metadata["raw"]["resolved"]
+    if max_pixels is None:
+        # Include the input and unpack scratch space, or the larger demosaic working set.
+        unpack_bytes = expected[0] + height * resolved["stride_pixels"] * 5 + width * height * 4
+        demosaic_bytes = 28 * width * height
+        _check_image_memory(max(unpack_bytes, demosaic_bytes))
     array = load_raw_array(source, metadata)
     rgb = demosaic_bilinear(array, resolved["bayer"], black_level=resolved["black_level"],
                             white_level=resolved["white_level"], gain=resolved["gain"],
@@ -433,7 +447,7 @@ def _worker_raw_convert(pyvips: Any, payload: dict[str, Any], max_pixels: int) -
     return {"path": str(output), "width": width, "height": height}
 
 
-def _worker_render(pyvips: Any, payload: dict[str, Any], max_pixels: int) -> dict[str, Any]:
+def _worker_render(pyvips: Any, payload: dict[str, Any], max_pixels: int | None) -> dict[str, Any]:
     """功能说明：worker 内执行一次渲染：解码源图、可选差分、裁剪缩放、编码落盘。
 
     调用时机：[_worker_main] 收到 render 请求时调用，每次请求一次。
@@ -539,14 +553,14 @@ def _worker_render(pyvips: Any, payload: dict[str, Any], max_pixels: int) -> dic
 class MediaService:
     """HTTP 媒体门面；sandbox=None 保留 personal 行为，其他合法模式均强制命名空间。"""
 
-    def __init__(self, cache_dir: Path, cache_bytes: int = 2 * 1024**3, max_pixels: int = 24_000_000, *, disk_min_free_bytes: int = 0, sandbox: str | None = None, max_pending: int = 16, preview_effort: int = 0, png_compression: int = 6, raw_high_format: str = "jpeg", allow_source_passthrough: bool = False):
+    def __init__(self, cache_dir: Path, cache_bytes: int = 2 * 1024**3, max_pixels: int | None = 24_000_000, *, disk_min_free_bytes: int = 0, sandbox: str | None = None, max_pending: int = 16, preview_effort: int = 0, png_compression: int = 6, raw_high_format: str = "jpeg", allow_source_passthrough: bool = False):
         if not 0 <= preview_effort <= 6 or not 0 <= png_compression <= 9 or raw_high_format not in {"jpeg", "webp"}:
             raise ValueError("invalid media encoder settings")
         self.preview_effort, self.png_compression, self.raw_high_format = int(preview_effort), int(png_compression), raw_high_format
         self.cache_dir = Path(cache_dir).resolve()
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.cache_bytes = int(cache_bytes)
-        self.max_pixels = int(max_pixels)
+        self.max_pixels = None if max_pixels is None else int(max_pixels)
         self.disk_min_free_bytes = int(disk_min_free_bytes)
         if max_pending < 1:
             raise ValueError("max_pending must be positive")
@@ -558,8 +572,10 @@ class MediaService:
                 raise ValueError("sandbox must be auto, namespace, none or None")
         self.sandbox = sandbox
         self.allow_source_passthrough = allow_source_passthrough and sandbox is None
-        if self.cache_bytes < 0 or self.max_pixels <= 0:
-            raise ValueError("cache_bytes must be non-negative and max_pixels must be positive")
+        if self.cache_bytes < 0 or (self.max_pixels is not None and self.max_pixels <= 0):
+            raise ValueError("cache_bytes must be non-negative and a configured max_pixels must be positive")
+        if sandbox is not None and self.max_pixels is None:
+            raise ValueError("sandboxed media requires a positive max_pixels")
         self._ctx = mp.get_context("spawn")
         self._requests: Any | None = None
         self._results: Any | None = None
@@ -1191,7 +1207,7 @@ class MediaService:
                         width, height = int.from_bytes(data[:4], "big"), int.from_bytes(data[4:8], "big")
                         if (data[8] != 8 or data[9] not in {2, 6} or data[10:12] != b"\x00\x00"
                                 or data[12] not in {0, 1} or width < 1 or height < 1
-                                or width * height > self.max_pixels):
+                                or (self.max_pixels is not None and width * height > self.max_pixels)):
                             return None
                         dimensions = (width, height)
                     elif kind == b"pHYs" and length == 9 and not has_data:
@@ -1268,6 +1284,9 @@ class MediaService:
             "diff_stat": diff_stat,
             "diff_revision": str(diff_revision) if diff_revision is not None else None,
         }
+        if self.max_pixels is None:
+            # A capped service must never reuse a render produced without its source pixel limit.
+            payload["pixel_limit"] = None
         if quality == "preview":
             payload["preview_effort"] = self.preview_effort
         if encoding == "png":
@@ -1296,8 +1315,10 @@ class MediaService:
             except OSError:
                 pass
             self._cache_index.pop(output, None)
-        if self.disk_min_free_bytes and shutil.disk_usage(self.cache_dir).free - self.max_pixels * 4 * (3 if diff_source else 2) < self.disk_min_free_bytes:
-            raise MediaError("磁盘剩余空间不足以生成媒体缓存", "DISK_FLOOR", 507)
+        if self.disk_min_free_bytes:
+            reserve = (self.max_pixels or 0) * 4 * (3 if diff_source else 2)
+            if shutil.disk_usage(self.cache_dir).free - reserve < self.disk_min_free_bytes:
+                raise MediaError("磁盘剩余空间不足以生成媒体缓存", "DISK_FLOOR", 507)
         result = await self._submit(key, "render", payload, idle_only=idle_only)
         result_path = Path(result["path"])
         self._touch_cache(result_path)

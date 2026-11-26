@@ -3,7 +3,7 @@
 
 ## 简要说明
 
-本项目为本人纯 vibe coding 开发的 low-level vision 科研辅助基建，主打一个“差不多就得了”，可能还有很多问题，不保证及时更新，仅供教学参考，万望海涵。
+本项目为本人纯 vibe coding 开发的底层视觉科研辅助基建，主打一个“差不多就得了”，可能还有很多问题，不保证及时更新，仅供教学参考，万望海涵。
 
 - **Web**：WebCompare 可以直接跑在 GPU 服务器上，本机打开浏览器就能比图。
 - **SSH**：也可以在自己电脑上启动 WebCompare，通过 SSH/SFTP 打开远端实验目录，边选边看。
@@ -12,7 +12,7 @@
 
 ![2×3 并排比较。上排为参考图、带噪、模糊，下排为马赛克、灰度褪色、轻微低光。](examples/screenshots/compare.webp)
 
-## 在 Personal 模式下比图
+## 图像比较
 
 工作台默认使用中文，可在「设置 → 语言」切换 English。桌面版也可以在「设置 → 软件更新」检查新版。
 
@@ -23,6 +23,16 @@
 切到「差分」，基准选第 1 格，增益设为 **2**。左上角保留参考图。模糊让边缘发亮，马赛克留下阶梯。灰度版只去色，原本的中性灰在差分图里仍是黑色。
 
 ![五种退化相对参考图的 RGB 绝对差](examples/screenshots/difference.webp)
+
+## 视频比较
+
+在工作台左上角切换「视频模式」，打开 `examples/video`，按文件名顺序选中四个 MP4，打开 **2 行 × 2 列**。样片把 VideoMatte240K 的人物合成到带窗格和地板的简洁布景。四格依次显示合成画面 `RGB`、透明度 `α`、`RGB × α` 和 `RGB × (1 − α)`，每路 15 帧、1 秒。 [【素材出处与处理方法说明】](examples/video/README.md)
+
+点击「播放」同步查看四路。暂停后用帧号、前后帧或进度条定位，也可以双击一格后单独步进，检查该路的时序。缩放、取色和差分使用当前帧。
+
+![Personal 视频工作台的四路抠像结果](examples/screenshots/video.png)
+
+Personal 的图片和视频按实际资源处理，可直接打开原始分辨率素材。浏览器需支持 WebCodecs；用 HTTPS 或环回地址访问。本机 NVIDIA 设备可在「解码」中按提示启用 NVDEC，个别解码失败的素材会回到浏览器路径。 [视频操作手册](https://github.com/fenghansen/WebCompare/wiki/Comparison-zh#比较四路视频)
 
 ## 安装与运行
 
@@ -63,8 +73,6 @@ ssh -N -L 7865:127.0.0.1:7865 user@server
 
 - **Windows** 推荐 x64 便携 ZIP。解压整个目录，双击 `WebCompare.exe`。需要开始菜单入口时选 Setup。
 - **Linux** 图形桌面已有 GTK3 和 WebKitGTK 4.1 时，解压 tar.gz 并运行 `./webcompare-desktop`。有 sudo 权限也可安装 DEB。只想运行浏览器工作台时，可在自己的 Python 环境安装同版 wheel，再运行 `webcompare serve`。
-
-视频逐帧比较为实验功能，尚待维护者手动验收。
 
 ## 命令行
 

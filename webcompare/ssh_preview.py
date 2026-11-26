@@ -83,7 +83,8 @@ try:
             if image.format not in {"PNG", "JPEG", "WEBP"} or image.mode not in {"L", "LA", "RGB", "RGBA", "P"} or getattr(image, "n_frames", 1) != 1:
                 sys.exit(70)
             width, height = image.size
-            if width <= 0 or height <= 0 or width * height > request["max_pixels"]:
+            max_pixels = request["max_pixels"]
+            if width <= 0 or height <= 0 or (max_pixels is not None and width * height > max_pixels):
                 sys.exit(72)
             alpha = "A" in image.mode or "transparency" in image.info
             bands = {"L": 1, "LA": 2, "RGB": 3, "RGBA": 4}.get(image.mode, 4 if alpha else 3)
@@ -198,7 +199,7 @@ class RemotePreviewEngine:
             while len(self._backends) > 256:
                 self._backends.popitem(last=False)
 
-    def _run(self, source: RemotePath, expected_revision: str, attrs, operation: str, max_pixels: int, max_size: int = 0, *, cancel_event=None):
+    def _run(self, source: RemotePath, expected_revision: str, attrs, operation: str, max_pixels: int | None, max_size: int = 0, *, cancel_event=None):
         _check_exec_cancelled(cancel_event)
         identity = (source.connection_id, attrs.st_dev)
         with self._lock:
@@ -214,7 +215,7 @@ class RemotePreviewEngine:
         for candidate in choices:
             _check_exec_cancelled(cancel_event)
             # For WebP, use the Python animation check or the local decoder.
-            # The bounded ImageMagick thumbnail process cannot hold full 24 MP RGB.
+            # ImageMagick is only used for metadata and bounded thumbnails.
             if candidate == "imagemagick" and (operation == "high" or source.suffix.lower() == ".webp"):
                 return None
             argv = (["sh", "-c", _MAGICK_SCRIPT, "webcompare-preview", source.path, operation, str(max_size)]
@@ -250,7 +251,7 @@ class RemotePreviewEngine:
         return None
 
     @staticmethod
-    def _decode_metadata(backend: str, content: bytes, max_pixels: int) -> dict | None:
+    def _decode_metadata(backend: str, content: bytes, max_pixels: int | None) -> dict | None:
         try:
             if backend == "imagemagick":
                 parts = content.decode("utf-8").split("|")
@@ -273,13 +274,14 @@ class RemotePreviewEngine:
                     or data.get("bands") not in {1, 2, 3, 4}
                     or type(data.get("has_alpha")) is not bool or type(data.get("has_icc")) is not bool):
                 return None
-            if data["width"] <= 0 or data["height"] <= 0 or data["width"] * data["height"] > max_pixels:
+            if (data["width"] <= 0 or data["height"] <= 0
+                    or (max_pixels is not None and data["width"] * data["height"] > max_pixels)):
                 raise SSHError("图片超过像素上限", "PIXEL_LIMIT", 422)
             return {key: data[key] for key in ("width", "height", "bands", "format", "has_alpha", "has_icc", "bit_depth")}
         except (ValueError, TypeError, KeyError, UnicodeError):
             return None
 
-    def metadata(self, source: RemotePath, expected_revision: str, max_pixels: int, *, cancel_event=None) -> dict | None:
+    def metadata(self, source: RemotePath, expected_revision: str, max_pixels: int | None, *, cancel_event=None) -> dict | None:
         """功能说明：优先在远端读取普通图片元数据，避免先下载完整大 PNG。
 
         调用时机：统一来源媒体层请求 SSH 资产元数据时。
@@ -291,7 +293,7 @@ class RemotePreviewEngine:
 
         输出/副作用：返回 MediaService 兼容字典；能力不足返回 None，不下载原图。
         """
-        if source.suffix.lower() not in IMAGE_FORMATS or max_pixels <= 0:
+        if source.suffix.lower() not in IMAGE_FORMATS or (max_pixels is not None and max_pixels <= 0):
             return None
         key = (str(source), expected_revision, max_pixels)
         with self.remote.cache_lease(), self._resource_lock("preview-metadata:" + repr(key), cancel_event):
@@ -345,7 +347,7 @@ class RemotePreviewEngine:
             if reserved:
                 self.remote._release(len(content))
 
-    def render(self, source: RemotePath, expected_revision: str, max_size: int, box=None, max_pixels: int = 24_000_000, *, cancel_event=None) -> Path | None:
+    def render(self, source: RemotePath, expected_revision: str, max_size: int, box=None, max_pixels: int | None = 24_000_000, *, cancel_event=None) -> Path | None:
         """功能说明：只传回普通图片缩小后的 PNG，保留精确原图流程供本地调用。
 
         调用时机：统一来源层处理普通 preview 请求；ICC、ROI、high、exact、diff 留给原流程。
@@ -409,9 +411,9 @@ class RemotePreviewEngine:
             offset += length
         return False
 
-    def high(self, source: RemotePath, expected_revision: str, max_pixels: int = 24_000_000, *, cancel_event=None) -> MediaResult | None:
+    def high(self, source: RemotePath, expected_revision: str, max_pixels: int | None = 24_000_000, *, cancel_event=None) -> MediaResult | None:
         """Transmit one full-size JPEG (or alpha PNG), without downloading/re-encoding the original."""
-        if source.suffix.lower() not in IMAGE_FORMATS or max_pixels <= 0:
+        if source.suffix.lower() not in IMAGE_FORMATS or (max_pixels is not None and max_pixels <= 0):
             return None
         identity = hashlib.sha256(json.dumps([str(source), expected_revision, max_pixels, "high-v1"],
                                             ensure_ascii=False).encode()).hexdigest()

@@ -5,7 +5,7 @@ backend-path = ["."]
 
 [project]
 name = "webcompare"
-version = "0.1.0"
+version = "0.1.1"
 description = "A small self-hosted image group comparison service"
 readme = "README.md"
 authors = [{name = "fenghansen"}]
@@ -19,6 +19,7 @@ Repository = "https://github.com/fenghansen/WebCompare"
 Releases = "https://github.com/fenghansen/WebCompare/releases"
 
 [project.optional-dependencies]
+nvdec = ["av>=19.0.2,<20"]
 test = ["pytest>=8,<10", "httpx>=0.28,<1"]
 # Retained for older install commands; RAW support is now a core dependency.
 raw = ["numpy>=2,<3"]

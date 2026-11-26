@@ -1,18 +1,21 @@
 import { t } from './i18n.js';
-import { api, type Comparison, type Metadata, type ViewState, type PanelState, type RenderQuality } from './api';
+import { api, type ApiError, type Comparison, type Metadata, type ViewState, type PanelState, type RenderQuality } from './api';
 import { VideoFrames } from './video';
+import { MediaMemoryError, withMediaMemory } from './media-memory';
 import { GpuEffects } from './gpu-effects.js';
-import { layoutShape, makeViewState, panelPlan, slotAssets, pageInfo, orderedGroupIndices, isRawPath, rawSettingsKey, imageDisplayQuality } from './state.js';
+import { layoutShape, makeViewState, panelPlan, slotAssets, slotVideoAssets, pageInfo, orderedGroupIndices, isRawPath, rawSettingsKey, imageDisplayQuality } from './state.js';
 
 type Rect = NonNullable<ViewState['view']>;
-type Picture = { key: string; bitmap: ImageBitmap; box: Rect; width: number; height: number; used: number; quality?: RenderQuality; p99?: number; thumbnails?: Map<number, HTMLCanvasElement> };
-type Context = { token: number; signal: AbortSignal; state: ViewState; share?: string; size: number; full: boolean };
+type Picture = { key: string; bitmap: ImageBitmap | VideoFrame; box: Rect; width: number; height: number; used: number; quality?: RenderQuality; p99?: number; reducedVideo?: boolean; preview?: HTMLCanvasElement; thumbnails?: Map<number, HTMLCanvasElement> };
+type Context = { token: number; signal: AbortSignal; state: ViewState; share?: string; size: number; full: boolean; videoWidths: Map<string, number> };
 type Plan = { kind: string; left: string | null; right: string | null };
 type EffectSource = HTMLCanvasElement | ImageBitmap;
 type Cell = { x: number; y: number; width: number; height: number };
 const SERVER_CACHE_LIMIT = 96 * 1024 * 1024;
 const GAP = 2;
 const abortError = () => new DOMException('Cancelled', 'AbortError');
+const isMemoryPressure = (error: unknown): error is Error =>
+  error instanceof MediaMemoryError || (error as ApiError | null)?.code === 'MEMORY_PRESSURE';
 async function runLimited<T>(items:T[],limit:number,task:(item:T)=>Promise<void>,signal?:AbortSignal) {
   let cursor=0;
   await Promise.all(Array.from({length:Math.min(limit,items.length)},async()=>{
@@ -31,6 +34,14 @@ export class Viewer {
   private ids: (string | null)[] = [];
   selectedIndex: number | null = null;
   private videos=new Map<string,VideoFrames>();
+  private videoAssetIds=new Map<string,string>();
+  private videoPlaying = false;
+  private preloadNextVideo = false;
+  private videoPreload: AbortController | null = null;
+  private preloadedVideos = new Map<string, Picture>();
+  private memoryBlocked = false;
+  private blockedFrameCounts: Map<string,number> | null = null;
+  get videoMemoryBlocked() { return this.blockedFrameCounts !== null; }
   private meta = new Map<string, Metadata>();
   private metadataCache = new Map<string, Metadata>();
   private cache = new Map<string, Picture>();
@@ -60,8 +71,12 @@ export class Viewer {
     this.titleCache.clear();this.paint();
   }
   private controller = new AbortController();
-  /** 直方图开关：开启后基于已解码的预览位图现场统计，不额外请求网络。 */
-  toggleHistogram() { this.showHistogram=!this.showHistogram; this.paint(); return this.showHistogram; }
+  toggleHistogram() {
+    this.showHistogram=!this.showHistogram;
+    this.paint();
+    if(this.videoPreviewNeedsUpgrade())this.refresh(0);
+    return this.showHistogram;
+  }
   /** 覆显只影响画布标注，不改变图像、查看参数或网络请求。 */
   setOverlays(overlays: { titles: boolean; details: boolean; titleScale?: number }) {
     const scale=overlays.titleScale??this.overlays.titleScale;
@@ -140,11 +155,14 @@ export class Viewer {
   private wiping: { dx: number; width: number; scale: number } | null = null;
   private points: Array<Cell & { scale: number; scaleY: number; dx: number; dy: number }> = [];
   private observer: ResizeObserver;
-  constructor(private change: (patch: Partial<ViewState>) => void, private status: (text: string) => void, _profile: string, private selectionChange: () => void = () => {}, private metadataChange: () => void = () => {}, private localImages = false, private personal = false) {
+  constructor(private change: (patch: Partial<ViewState>) => void, private status: (text: string) => void, _profile: string, private selectionChange: () => void = () => {}, private metadataChange: () => void = () => {}, private localImages = false, private personal = false, private pauseVideo: () => void = () => {}) {
     this.canvas.id = 'compare-canvas';
     this.canvas.tabIndex = 0;
     this.canvas.setAttribute('aria-label', t('图片比较工作区，双击选中或取消，滚轮缩放，拖动平移，Alt+单击读取像素'));
-    this.observer = new ResizeObserver(() => this.paint());
+    this.observer = new ResizeObserver(() => {
+      this.paint();
+      if(this.videoPreviewNeedsUpgrade())this.refresh(0);
+    });
     this.observer.observe(this.canvas);
     this.refreshTheme();
     this.canvas.addEventListener('wheel', e => {
@@ -200,11 +218,24 @@ export class Viewer {
       if (!hit || !id) return;
       const x = Math.floor(hit.wx), y = Math.floor(hit.wy), m = this.meta.get(id);
       if (!m || x<0 || y<0 || x>=m.width || y>=m.height) return;
+      if(this.comparison?.media_kind==='video') {
+        this.pauseForVideoInteraction();
+        const comparison=this.comparison,share=this.share,index=this.videoFrameIndex(id,this.state);
+        await this.settled();
+        if(this.comparison!==comparison || this.share!==share || this.suspended || this.videoPlaying ||
+           this.videoFrameIndex(id,this.state)!==index) return;
+        const picture=this.images.get(id);
+        if(picture && !picture.reducedVideo && Number(JSON.parse(picture.key).at(-1))===index) {
+          try {
+            this.status(t('槽 ')+(hit.index+1)+' · ('+x+', '+y+') '+t('显示 RGB')+' ['+this.videoPixel(picture,x,y).join(', ')+']');
+          } catch(e) { this.status(String(e)); }
+        }
+        return;
+      }
       const token=this.token,signal=this.controller.signal;
       try {
-        const picture=this.images.get(id),display=this.comparison?.media_kind==='video'||m.format==='raw';
-        const p = this.comparison?.media_kind==='video'&&picture?{values:this.videoPixel(picture,x,y)}:await api.pixel(id,x,y,this.share,this.isRawAsset(id)?this.state.raw:undefined,signal);
-        if(!signal.aborted&&token===this.token)this.status(t('槽 ')+(hit.index+1)+' · ('+x+', '+y+') '+(display?t('显示 RGB'):t('原始通道值'))+' ['+p.values.join(', ')+']');
+        const p = await api.pixel(id,x,y,this.share,this.isRawAsset(id)?this.state.raw:undefined,signal);
+        if(!signal.aborted&&token===this.token)this.status(t('槽 ')+(hit.index+1)+' · ('+x+', '+y+') '+(m.format==='raw'?t('显示 RGB'):t('原始通道值'))+' ['+p.values.join(', ')+']');
       } catch(e) { if(!signal.aborted&&token===this.token)this.status(String(e)); }
     });
   }
@@ -221,7 +252,7 @@ export class Viewer {
       c.height = Math.max(1, Math.round(cell.height * dpr));
       const x = c.getContext('2d')!;
       x.drawImage(this.canvas, Math.round(cell.x * dpr), Math.round(cell.y * dpr), c.width, c.height, 0, 0, c.width, c.height);
-      out.push({ name: this.comparison?.assets[id]?.name || t`槽 ${i + 1}`, canvas: c });
+      out.push({ name: this.comparison?.assets[this.assetId(id)]?.name || t`槽 ${i + 1}`, canvas: c });
     });
     this.paint();
     return out;
@@ -238,13 +269,38 @@ export class Viewer {
   }
   /** The comparison rail shares the displayed bitmap: no second read or decode. */
   thumbnail(id:string,slot=0) {
-    const p=this.images.get(id);if(!p)return null;const cached=p.thumbnails?.get(slot);if(cached)return cached;
+    const key=this.comparison?.media_kind==='video'?this.ids[slot]:id;
+    if(!key || this.assetId(key)!==id)return null;
+    const p=this.images.get(key);if(!p)return null;const cached=p.thumbnails?.get(slot);if(cached)return cached;
     const canvas=document.createElement('canvas');canvas.width=128;canvas.height=80;
     const scale=Math.min(128/p.width,80/p.height);
-    canvas.getContext('2d')!.drawImage(p.bitmap,(128-p.width*scale)/2,(80-p.height*scale)/2,p.width*scale,p.height*scale);
+    canvas.getContext('2d')!.drawImage(p.preview??p.bitmap,(128-p.width*scale)/2,(80-p.height*scale)/2,p.width*scale,p.height*scale);
     (p.thumbnails??=new Map()).set(slot,canvas);return canvas;
   }
-  videoInfo() { return this.ids.map(id=>id?{id,count:this.videos.get(id)?.timestamps.length||0,frame:(this.state.video_frame||0)+(this.state.video_offsets?.[id]||0)}:null); }
+  private assetId(key:string) { return this.videoAssetIds.get(key)??key; }
+  private videoFrameOffset(key:string,state:ViewState) {
+    return state.video_offsets?.[key] ?? state.video_offsets?.[this.assetId(key)] ?? 0;
+  }
+  private videoFrameIndex(key:string,state:ViewState) { return (state.video_frame||0)+this.videoFrameOffset(key,state); }
+  videoInfo() {
+    return this.ids.map(key=>{
+      if(!key)return null;
+      const video=this.videos.get(key);
+      return {id:this.assetId(key),key,count:video?.timestamps.length||this.blockedFrameCounts?.get(key)||0,
+        frame:this.videoFrameIndex(key,this.state),offset:this.videoFrameOffset(key,this.state),decoder:video?.decoderName,fallback:video?.localFallback};
+    });
+  }
+  setVideoPlaying(playing: boolean) {
+    if(this.videoPlaying===playing)return;
+    this.videoPlaying=playing;
+    if(!playing && this.videoPreviewNeedsUpgrade())this.refresh(0);
+  }
+  private pauseForVideoInteraction() {
+    this.cancelVideoPreload();
+    if(!this.videoPlaying)return;
+    this.setVideoPlaying(false);
+    this.pauseVideo();
+  }
   rawInfo() {
     return this.ids.flatMap((id,index)=>{
       if(!id||!this.isRawAsset(id))return [];
@@ -280,13 +336,15 @@ export class Viewer {
     this.paint();
   }
   private releasePicture(p: Picture) {
+    if(p.preview){p.preview.width=0;p.preview.height=0;}
     this.gpu?.release(p.key);p.bitmap.close();p.thumbnails?.forEach(canvas=>{canvas.width=0;canvas.height=0;});p.thumbnails?.clear();
   }
   /** Return to the picker releases decoded resources; the saved view can resume. */
   suspend() {
-    this.suspended=true;
+    this.suspended=true;this.videoPlaying=false;this.memoryBlocked=false;this.blockedFrameCounts=null;
+    this.preloadNextVideo=false;this.cancelVideoPreload();
     this.cancelPointer();
-    this.videos.forEach(v=>v.dispose());this.videos.clear();
+    this.videos.forEach(v=>v.dispose());this.videos.clear();this.videoAssetIds.clear();
     this.controller.abort();++this.token;clearTimeout(this.timer);
     this.context=null;this.networkKey='';this.loading=false;
     this.dragging=null;this.wiping=null;this.held=null;
@@ -302,37 +360,53 @@ export class Viewer {
   }
   update(comparison: Comparison | null, state: ViewState, share?: string) {
     if(this.destroyed)return;
-    const nextIds=slotAssets(comparison,state);
+    const videoSlots=comparison?.media_kind==='video'?slotVideoAssets(comparison,state):null;
+    const nextIds=videoSlots?.map(slot=>slot?.key??null)??slotAssets(comparison,state);
     const sameComparison=comparison?.id===this.comparison?.id&&share===this.share;
+    const sourcesChanged=!sameComparison || JSON.stringify(nextIds)!==JSON.stringify(this.ids);
+    const newVideoPage=this.suspended || sourcesChanged;
     if(!sameComparison)this.suspend();
     this.suspended=false;
     const rawChanged=rawSettingsKey(state.raw)!==rawSettingsKey(this.state.raw);
     const rawVisible=nextIds.some((id:string|null)=>id&&(isRawPath(comparison?.assets[id]?.path)||isRawPath(comparison?.assets[id]?.name)));
     const resetSelection=comparison?.id!==this.comparison?.id || share!==this.share || state.layout!==this.state.layout || state.group_index!==this.state.group_index || state.grouping!==this.state.grouping || state.natural_sort!==this.state.natural_sort || JSON.stringify(nextIds)!==JSON.stringify(this.ids);
-    if(comparison?.id!==this.comparison?.id || share!==this.share || JSON.stringify(nextIds)!==JSON.stringify(this.ids) || rawChanged&&rawVisible) {
+    if(sourcesChanged || rawChanged&&rawVisible) {
       // Keep only the last viewed page for fast back/forward; no personal byte cap.
-      this.previousPage=this.personal&&sameComparison&&!rawChanged?new Set([...this.images.values(),...this.diffs.values()].map(p=>p.key)):new Set();
+      this.previousPage=this.personal&&sameComparison&&!rawChanged?new Set([...this.images.values(),...this.diffs.values()].filter(p=>!('displayWidth' in p.bitmap)).map(p=>p.key)):new Set();
       for(const [id,video] of this.videos)if(comparison?.id!==this.comparison?.id||share!==this.share||!nextIds.includes(id)){video.dispose();this.videos.delete(id);this.meta.delete(id);}
       this.controller.abort();++this.token;this.context=null;this.networkKey='';
       this.loading=true;
       this.images.clear();this.diffs.clear();this.diffTokens.clear();this.errors.clear();this.clearHistograms();
     }
     if(rawChanged)for(const [id,m] of this.meta)if(m.format==='raw')this.meta.delete(id);
-    if(comparison?.media_kind==='video'&&(state.video_frame!==this.state.video_frame||JSON.stringify(state.video_offsets)!==JSON.stringify(this.state.video_offsets)))this.loading=true;
+    const frameChanged=comparison?.media_kind==='video'&&(state.video_frame!==this.state.video_frame||JSON.stringify(state.video_offsets)!==JSON.stringify(this.state.video_offsets));
+    if(newVideoPage) {
+      this.cancelVideoPreload();
+      this.preloadNextVideo=comparison?.media_kind==='video';
+    } else if(frameChanged && !this.videoPlaying) {
+      if(this.videoPreload){this.controller.abort();++this.token;this.context=null;}
+      this.cancelVideoPreload();this.preloadNextVideo=false;
+    }
+    // A rapid seek can return to the loaded frame before the scheduled load runs.
+    if(frameChanged||this.memoryBlocked){this.networkKey='';this.loading=true;}
     this.comparison=comparison; this.state=structuredClone(state); this.share=share;
     this.ids=nextIds;
+    this.videoAssetIds.clear();
+    if(videoSlots)for(const slot of videoSlots)if(slot&&slot.key!==slot.id)this.videoAssetIds.set(slot.key,slot.id);
     if(resetSelection) {
       this.cancelPointer();
       this.dragging=null;this.wiping=null;this.canvas.classList.remove('dragging');
       if(this.selectedIndex!==null)this.select(null);
     }
     if(rawChanged||resetSelection)this.metadataChange();
-    this.paint(); this.refresh(0);
+    if(!frameChanged)this.paint();
+    this.refresh(0);
   }
   hold(direction: 'left' | 'right' | 'up' | 'down' | 'seq-prev' | 'seq-next' | null) { if(this.held===direction)return;this.held=direction; this.paint(); this.refresh(0); }
   setEdgeDiff(on: boolean) { this.edgeDiff=on; this.paint(); void this.ensureDiffs(); }
   select(index: number | null) {
     this.selectedIndex=index!==null && this.ids[index]?index:null;
+    if(this.selectedIndex!==null)this.pauseForVideoInteraction();
     this.paint();this.selectionChange();
     this.status(this.selectedIndex===null?t('全部图像联动 · 双击可选中一格'):t`已选中第 ${this.selectedIndex+1} 格 · 再次双击或 Esc 取消`);
   }
@@ -379,6 +453,7 @@ export class Viewer {
     this.change({panels});
   }
   oneToOne() {
+    this.pauseForVideoInteraction();
     const panels=this.panels();
     for(const i of this.targets()) {
       const v=this.viewport(i),cell=this.points[i];if(!cell || !this.meta.has(this.ids[i]!))continue;
@@ -454,23 +529,86 @@ export class Viewer {
     const point=this.matrix(sourceIndex>=0?sourceIndex:index,cell).inverse().transformPoint({x,y});
     return {index,cell,sourceIndex,wx:point.x,wy:point.y};
   }
+  private videoPreviewMode() {
+    return this.comparison?.media_kind==='video' &&
+      this.state.mode==='split' && this.held===null && this.selectedIndex===null && !this.showHistogram &&
+      this.state.channel==='rgb' && this.state.exposure===0 && this.state.gamma===1;
+  }
+  private videoPreviewWidths(preloading=false) {
+    const widths = new Map<string, number>();
+    if((!this.videoPlaying && !preloading) || !this.videoPreviewMode())return widths;
+    const dpr=devicePixelRatio||1;
+    this.ids.forEach((id,slot)=>{
+      const m=id?this.meta.get(id):null,p=this.points[slot];
+      if(!id || !m || !p || !this.videos.get(id)?.canUseLocalDecoder)return;
+      const width=Math.min(m.width,Math.max(1,Math.ceil(m.width*Math.max(p.scale,p.scaleY)*dpr)));
+      widths.set(id,Math.max(width,widths.get(id)||0));
+    });
+    for(const [id,width] of widths) {
+      if(width>=this.meta.get(id)!.width){widths.delete(id);continue;}
+      // Keep the decoder's raster through small fit changes as the UI settles.
+      const previous=this.preloadedVideos.get(id)?.width ?? this.context?.videoWidths.get(id);
+      if(previous!==undefined && previous>=width && previous<=width*1.25)widths.set(id,previous);
+    }
+    return widths;
+  }
+  private videoPreviewNeedsUpgrade() {
+    const previous=this.context?.videoWidths;
+    if(!previous?.size)return false;
+    const widths=this.videoPreviewWidths();
+    return [...previous].some(([id,width])=>(widths.get(id)??Infinity)>width) &&
+      (this.loading || [...this.images.values()].some(p=>p.reducedVideo));
+  }
   private refresh(delay: number) {
+    if(this.videoPreload && !this.videoPreviewMode())this.cancelVideoPreload();
+    if(this.videoPreviewNeedsUpgrade()) {
+      // A late preview cannot publish over the restored original of the same frame.
+      this.controller.abort();++this.token;this.context=null;this.networkKey='';
+      this.loading=true;this.canvas.dataset.ready='false';
+    }
     clearTimeout(this.timer);
     this.timer=window.setTimeout(()=>void this.load(),delay);
+  }
+  private cancelVideoPreload() {
+    this.videoPreload?.abort();this.videoPreload=null;
+    this.preloadedVideos.clear();
+  }
+  private async preloadVideoFrame(context: Context) {
+    const state={...context.state,video_frame:(context.state.video_frame||0)+1};
+    if(this.ids.some(id=>id && this.videoFrameIndex(id,state)>=(this.videos.get(id)?.timestamps.length||0)))return;
+    const videoWidths=this.videoPreviewWidths(true);
+    if(!videoWidths.size)return;
+    const preload=new AbortController();
+    this.videoPreload=preload;
+    const next={...context,state,videoWidths,signal:preload.signal};
+    await runLimited([...videoWidths.keys()],2,async id=>{
+      try {
+        const picture=await this.picture(id,next);
+        if(!preload.signal.aborted && picture?.reducedVideo)this.preloadedVideos.set(id,picture);
+      } catch(error) {
+        if(isMemoryPressure(error) && this.videoPreload===preload)this.cancelVideoPreload();
+      }
+    },preload.signal);
+    if(this.videoPreload===preload)this.videoPreload=null;
   }
   private async load() {
     if(this.suspended||this.destroyed)return;
     const state=structuredClone(this.state);
     const requestIds=new Set(this.ids.filter((id):id is string=>!!id));
     const hasRaw=[...requestIds].some(id=>this.isRawAsset(id));
-    const full=true,size=1024;
+    const full=true,size=1024,videoWidths=this.videoPreviewWidths();
     // Every quality loads the complete image once; pan/zoom stays in Canvas.
-    const key=JSON.stringify([this.comparison?.id,this.share,[...requestIds],state.quality,this.localImages,size,full,hasRaw?rawSettingsKey(state.raw):null,state.video_frame,state.video_offsets]);
+    const key=JSON.stringify([this.comparison?.id,this.share,[...requestIds],state.quality,this.localImages,size,full,hasRaw?rawSettingsKey(state.raw):null,state.video_frame,state.video_offsets,[...videoWidths]]);
     if (key===this.networkKey) { await this.ensureDiffs(); return; }
+    const preloadNext=this.preloadNextVideo;
+    this.preloadNextVideo=false;
+    this.cancelVideoPreload();
     this.networkKey=key; this.controller.abort(); this.controller=new AbortController();
-    const context={token:++this.token,signal:this.controller.signal,state,share:this.share,size,full};
+    const context={token:++this.token,signal:this.controller.signal,state,share:this.share,size,full,videoWidths};
     this.context=context;
-    if(this.comparison?.media_kind==='video'&&requestIds.size>8) {
+    this.memoryBlocked=false;
+    this.blockedFrameCounts=null;
+    if(!this.personal&&this.comparison?.media_kind==='video'&&requestIds.size>8) {
       this.videos.forEach(video=>video.dispose());this.videos.clear();this.images.clear();this.diffs.clear();
       this.errors=new Map([...requestIds].map(id=>[id,t('单页视频最多 8 路，请减少布局或切换为组内查看')]));this.loading=false;this.paint();return;
     }
@@ -478,29 +616,54 @@ export class Viewer {
     // Keep the old crop of this same group visible while the new crop arrives.
     // 同一页提高清晰度时保留上一张差分，直到新差分到达；token 区分新旧结果，
     // 避免旧预览被误当作高清结果，也避免拖动触发升级后闪空。
-    if(this.comparison?.media_kind==='video'){this.diffs.clear();this.diffTokens.clear();}
+    const video=this.comparison?.media_kind==='video';
+    // Keep the last complete video frame on screen until every lane is ready.
+    const pictures=video?new Map<string, Picture>():this.images;
     this.errors.clear();this.clearHistograms();this.loading=true;
-    this.paint();
+    if(!video)this.paint();
     await runLimited([...requestIds],2,async id=>{
       try {
         const p=await this.picture(id,context);
         if (context.token!==this.token) return;
-        if (p) this.images.set(id,p); else {this.images.delete(id);this.errors.set(id,t('查看范围之外'));}
-      } catch(e) { if(context.token===this.token && (e as Error).name!=='AbortError') {this.images.delete(id);this.errors.set(id,(e as Error).message);} }
-      if(context.token===this.token) {this.paint();this.metadataChange();}
+        if (p) pictures.set(id,p); else {pictures.delete(id);this.errors.set(id,t('查看范围之外'));}
+      } catch(e) {
+        if(context.token!==this.token || context.signal.aborted)return;
+        if(isMemoryPressure(e)){this.stopForMemory(e);return;}
+        if((e as Error).name!=='AbortError'){pictures.delete(id);this.errors.set(id,(e as Error).message);}
+      }
+      if(!video&&context.token===this.token) {this.paint();this.metadataChange();}
     },context.signal);
     if(context.token!==this.token) return;
-    this.loading=false;
-    await this.ensureDiffs();
+    if(video){this.images=pictures;this.diffs.clear();this.diffTokens.clear();}
+    await this.ensureDiffs(false);
     if(context.token!==this.token) return;
+    if(preloadNext && video && !this.errors.size && this.videoPreviewMode() &&
+       this.ids.every(id=>!id || this.videoFrameIndex(id,context.state)===this.videoFrameIndex(id,this.state)) &&
+       [...this.videos.values()].some(v=>v.canUseLocalDecoder)) {
+      this.paint();
+      await this.preloadVideoFrame(context);
+      if(context.token!==this.token)return;
+    }
+    this.loading=false;
     this.paint(); this.trim();if(this.comparison?.media_kind==='video')this.selectionChange();
+  }
+  private stopForMemory(error: Error) {
+    this.controller.abort();++this.token;this.context=null;
+    this.cancelVideoPreload();
+    this.memoryBlocked=true;
+    if(this.comparison?.media_kind==='video')this.blockedFrameCounts=new Map([...this.videos].map(([id,v])=>[id,v.timestamps.length]));
+    this.loading=false;
+    this.images.clear();this.diffs.clear();this.diffTokens.clear();this.previousPage.clear();
+    this.errors=new Map(this.ids.filter((id): id is string=>!!id).map(id=>[id,error.message]));
+    this.videos.forEach(video=>video.dispose());this.videos.clear();this.meta.clear();
+    this.paint();this.trim();this.status(error.message);this.selectionChange();
   }
   private async getMeta(id: string,context: Context) {
     const key=JSON.stringify([context.share,id,this.rawKey(id,context.state)]);
     let m=this.comparison?.media_kind==='video'?this.meta.get(id):this.metadataCache.get(key);
     if(!m && this.comparison?.media_kind==='video') {
       let video=this.videos.get(id);
-      if(!video){video=VideoFrames.asset(this.comparison.assets[id],context.share);this.videos.set(id,video);}
+      if(!video){video=VideoFrames.asset(this.comparison.assets[this.assetId(id)],context.share,this.personal);this.videos.set(id,video);}
       await video.init();if(context.signal.aborted)throw abortError();m=video.metadata!;this.meta.set(id,m);
     }
     if(!m) {
@@ -514,30 +677,49 @@ export class Viewer {
   }
   private isRawAsset(id: string) { const asset=this.comparison?.assets[id];return this.comparison?.media_kind!=='video'&&(isRawPath(asset?.path)||isRawPath(asset?.name)||this.meta.get(id)?.format==='raw'); }
   private rawKey(id: string,state: ViewState) { return this.isRawAsset(id)?rawSettingsKey(state.raw):null; }
-  private imageQuality(id: string,state: ViewState): RenderQuality { return imageDisplayQuality(state.quality,this.localImages,this.comparison?.assets[id]?.path); }
-  private async picture(id: string,context: Context): Promise<Picture|null> {
+  private imageQuality(id: string,state: ViewState): RenderQuality { return imageDisplayQuality(state.quality,this.localImages,this.comparison?.assets[this.assetId(id)]?.path); }
+  private async picture(id: string,context: Context,forceFull=false): Promise<Picture|null> {
     if(context.signal.aborted) throw abortError();
     if(this.comparison?.media_kind==='video') {
       const m=await this.getMeta(id,context);
-      const index=(context.state.video_frame||0)+(context.state.video_offsets?.[id]||0),key=JSON.stringify(['video',context.share,id,index]);
-      const cached=this.cache.get(key);if(cached){cached.used=performance.now();return cached;}
-      const pixels=this.ids.reduce((sum,id)=>{const m=id&&this.meta.get(id);return sum+(m?m.width*m.height:0);},0);
-      if(pixels>24*1024**2)throw new Error(t('当前页视频分辨率总量超过 24M 像素，请减少布局格数'));
-      const bitmap=await this.videos.get(id)!.frame(index,context.signal);
+      const index=this.videoFrameIndex(id,context.state),previewWidth=forceFull?undefined:context.videoWidths.get(id);
+      const fullKey=JSON.stringify(['video',context.share,id,index]);
+      const previewKey=previewWidth===undefined?fullKey:JSON.stringify(['video',context.share,id,previewWidth,index]);
+      const cached=this.cache.get(fullKey)||this.cache.get(previewKey);if(cached){cached.used=performance.now();return cached;}
+      if(!this.personal) {
+        const pixels=this.ids.reduce((sum,id)=>{const m=id&&this.meta.get(id);return sum+(m?m.width*m.height:0);},0);
+        if(pixels>24*1024**2)throw new Error(t('当前页视频分辨率总量超过 24M 像素，请减少布局格数'));
+      }
+      const decode=()=>{if(context.signal.aborted)throw abortError();return this.videos.get(id)!.frame(index,context.signal,this.personal,previewWidth);};
+      const bitmap=this.personal?await withMediaMemory(m.width*m.height*4,decode):await decode();
       if(context.signal.aborted){bitmap.close();throw abortError();}
-      const picture={key,bitmap,width:bitmap.width,height:bitmap.height,box:{x:0,y:0,width:m.width,height:m.height},used:performance.now()};
+      const width='displayWidth' in bitmap?bitmap.displayWidth:bitmap.width,height='displayHeight' in bitmap?bitmap.displayHeight:bitmap.height;
+      const reducedVideo=previewWidth!==undefined && (width<m.width || height<m.height);
+      const key=reducedVideo?previewKey:fullKey;
+      const picture={key,bitmap,width,height,box:{x:0,y:0,width:m.width,height:m.height},used:performance.now(),reducedVideo};
       this.cache.set(key,picture);return picture;
     }
     const quality=this.imageQuality(id,context.state);
     const key=JSON.stringify(['image',context.share,id,quality,context.full,context.size,this.rawKey(id,context.state)]);
     const metadata=this.getMeta(id,context);
     const cached=this.cache.get(key); if(cached) {await metadata;cached.used=performance.now();return cached;}
-    const [m,r]=await Promise.all([
-      metadata,
-      api.render(id,{quality,full:context.full,max_size:context.size,share:context.share,signal:context.signal,raw:this.isRawAsset(id)?context.state.raw:undefined}),
-    ]);
-    if(context.signal.aborted) throw abortError();
-    const bitmap=await createImageBitmap(r.blob);
+    const render=()=>api.render(id,{quality,full:context.full,max_size:context.size,share:context.share,
+      signal:context.signal,raw:this.isRawAsset(id)?context.state.raw:undefined});
+    const decode=(blob:Blob)=>{
+      if(context.signal.aborted)throw abortError();
+      return createImageBitmap(blob);
+    };
+    let m: Metadata, bitmap: ImageBitmap;
+    if(this.personal) {
+      m=await metadata;
+      bitmap=await withMediaMemory(m.width*m.height*4,async()=>{
+        if(context.signal.aborted)throw abortError();
+        return decode((await render()).blob);
+      });
+    } else {
+      const [info, result]=await Promise.all([metadata,render()]);
+      m=info;bitmap=await decode(result.blob);
+    }
     if(context.signal.aborted) {bitmap.close();throw abortError();}
     const picture={key,bitmap,width:bitmap.width,height:bitmap.height,box:{x:0,y:0,width:m.width,height:m.height},used:performance.now(),quality};
     this.cache.set(key,picture); return picture;
@@ -556,16 +738,26 @@ export class Viewer {
       if(!picture) {
         let bitmap:ImageBitmap;
         if(this.comparison?.media_kind==='video') {
-          const a=await this.picture(left,context),b=await this.picture(right,context);
+          const a=await this.picture(left,context,true),b=await this.picture(right,context,true);
           if(!a||!b)return null;
-          const canvas=new OffscreenCanvas(m.width,m.height),ctx=canvas.getContext('2d')!;
-          ctx.drawImage(a.bitmap,0,0);const first=ctx.getImageData(0,0,m.width,m.height);
-          ctx.drawImage(b.bitmap,0,0);const second=ctx.getImageData(0,0,m.width,m.height);
-          for(let i=0;i<first.data.length;i++)first.data[i]=i%4===3?255:Math.abs(first.data[i]-second.data[i]);
-          ctx.putImageData(first,0,0);bitmap=canvas.transferToImageBitmap();
+          const difference=async()=>{
+            if(context.signal.aborted)throw abortError();
+            const canvas=new OffscreenCanvas(m.width,m.height),ctx=canvas.getContext('2d')!;
+            ctx.drawImage(a.bitmap,0,0);const first=ctx.getImageData(0,0,m.width,m.height);
+            ctx.drawImage(b.bitmap,0,0);const second=ctx.getImageData(0,0,m.width,m.height);
+            for(let i=0;i<first.data.length;i++)first.data[i]=i%4===3?255:Math.abs(first.data[i]-second.data[i]);
+            ctx.putImageData(first,0,0);return canvas.transferToImageBitmap();
+          };
+          // One RGBA canvas and two readbacks in addition to the resident input bitmaps.
+          bitmap=this.personal?await withMediaMemory(m.width*m.height*12,difference):await difference();
         } else {
-          const blob=await api.diff(left,right,{quality,full:context.full,max_size:context.size,share:context.share,signal:context.signal,raw});
-          if(context.signal.aborted)throw abortError();bitmap=await createImageBitmap(blob);
+          const decode=async()=>{
+            if(context.signal.aborted)throw abortError();
+            const blob=await api.diff(left,right,{quality,full:context.full,max_size:context.size,share:context.share,signal:context.signal,raw});
+            if(context.signal.aborted)throw abortError();
+            return createImageBitmap(blob);
+          };
+          bitmap=this.personal?await withMediaMemory(m.width*m.height*4,decode):await decode();
         }
         if(context.signal.aborted) {bitmap.close();throw abortError();}
         picture={key,bitmap,width:bitmap.width,height:bitmap.height,box:{x:0,y:0,width:m.width,height:m.height},used:performance.now(),quality};
@@ -578,14 +770,18 @@ export class Viewer {
     this.pending.set(pendingKey,job);
     try { return await job; } finally { this.pending.delete(pendingKey); }
   }
-  private async ensureDiffs() {
+  private async ensureDiffs(repaint=true) {
     const context=this.context; if(!context || context.signal.aborted) return;
     const plans=panelPlan(this.ids,this.state.mode,this.state.direction,this.held,this.state.diff_base,layoutShape(this.state.layout).columns,this.edgeDiff) as Plan[];
     await runLimited(plans.filter(p=>p.kind==='diff' && p.left && p.right),2,async p=>{
       const pair=this.pairKey(p.left!,p.right!);
       if(this.diffs.has(pair)&&this.diffTokens.get(pair)===context.token || this.errors.has(pair)) return;
       try { await this.diff(p.left!,p.right!,context); }
-      catch(e) { if(context.token===this.token && (e as Error).name!=='AbortError') this.errors.set(pair,(e as Error).message); }
+      catch(e) {
+        if(context.token!==this.token || context.signal.aborted)return;
+        if(isMemoryPressure(e)){this.stopForMemory(e);return;}
+        if((e as Error).name!=='AbortError')this.errors.set(pair,(e as Error).message);
+      }
     },context.signal);
     if(context.token===this.token) {
       // A mode change does not restart image loading; retire its unused differences.
@@ -593,7 +789,7 @@ export class Viewer {
         const active=new Set((panelPlan(this.ids,this.state.mode,this.state.direction,this.held,this.state.diff_base,layoutShape(this.state.layout).columns,this.edgeDiff) as Plan[]).filter(p=>p.kind==='diff'&&p.left&&p.right).map(p=>this.pairKey(p.left!,p.right!)));
         for(const pair of this.diffs.keys())if(!active.has(pair)){this.diffs.delete(pair);this.diffTokens.delete(pair);}
       }
-      this.paint();this.trim();
+      if(repaint){this.paint();this.trim();}
     }
   }
   private paint(showTitles = true) {
@@ -608,6 +804,7 @@ export class Viewer {
     if(!this.comparison) {ctx.fillStyle=this.colors.text;ctx.textAlign='center';ctx.fillText(t('选择图片，开始比较'),w/2,h/2);ctx.textAlign='left';return;}
     const cols=layoutShape(this.state.layout).columns;
     const plans=panelPlan(this.ids,this.state.mode,this.state.direction,this.held,this.state.diff_base,cols,this.edgeDiff) as Plan[];
+    const previewMode=this.videoPlaying && this.videoPreviewMode();
     let ready=true;
     this.points=this.cells().map((cell,i)=>{
       const {x,y,width,height}=cell;
@@ -616,8 +813,14 @@ export class Viewer {
       ctx.fillStyle=this.colors.canvas;ctx.fillRect(x,y,width,height);
       ctx.save();ctx.beginPath();ctx.rect(x,y,width,height);ctx.clip();
       let message='';
-      const first=plan.left ? this.images.get(plan.left) : null,second=plan.right ? this.images.get(plan.right) : null;
+      const previewFits=previewMode && Math.max(geometry.scale,geometry.scaleY)*dpr<1;
+      const picture=(id:string|null)=>{
+        const p=id?this.images.get(id):null;
+        return p && (!p.reducedVideo || previewFits)?p:null;
+      };
+      const first=picture(plan.left),second=picture(plan.right);
       if(plan.kind==='missing') message=t('缺图');
+      else if(this.memoryBlocked&&ownId)message=this.errors.get(ownId)||'';
       else if(plan.kind==='diff' && plan.left && plan.right) {
         const pair=this.pairKey(plan.left,plan.right),diff=this.diffs.get(pair);
         if(diff) {
@@ -640,7 +843,7 @@ export class Viewer {
       if(message) {ctx.fillStyle=this.colors.text;ctx.textAlign='center';ctx.fillText(message,x+width/2,y+height/2,Math.max(10,width-16));ctx.textAlign='left';}
       ctx.restore();
       ctx.save();ctx.beginPath();ctx.rect(x,y,width,height);ctx.clip();
-      const asset=ownId?this.comparison!.assets[ownId]:null,m=ownId?this.meta.get(ownId):null;
+      const asset=ownId?this.comparison!.assets[this.assetId(ownId)]:null,m=ownId?this.meta.get(ownId):null;
       const relation=this.held!==null?(plan.kind==='diff'?t('边界 |Δ|'):t('邻图覆盖')):
         this.state.mode==='diff'?(i===this.state.diff_base?t('基准原图'):`|Δ ${i+1}−${this.state.diff_base+1}|`):'';
       const groupIndex=this.state.grouping==='within'?pageInfo(this.comparison,this.state.layout,this.state.group_index,this.state).groupIndex:orderedGroupIndices(this.comparison,this.state)[i];
@@ -664,7 +867,7 @@ export class Viewer {
         ctx.restore();
       }
       if(this.showHistogram) {
-        const shown=plan.kind==='diff'&&plan.left&&plan.right?this.diffs.get(this.pairKey(plan.left,plan.right)):plan.left?this.images.get(plan.left):null;
+        const shown=plan.kind==='diff'&&plan.left&&plan.right?this.diffs.get(this.pairKey(plan.left,plan.right)):first;
         if(shown) ctx.drawImage(this.histogram(shown),x+4,y+titleHeight+(titleHeight?7:4));
       }
       if(m && this.overlays.details) {
@@ -693,19 +896,32 @@ export class Viewer {
     const qualities=new Set(this.ids.filter((id):id is string=>!!id).map(id=>this.imageQuality(id,this.context?.state||this.state)));
     this.canvas.dataset.quality=this.context?(qualities.size===1?[...qualities][0]:'mixed'):'';
     this.canvas.dataset.requestedQuality=this.state.quality;
-    this.canvas.dataset.full=String(!!this.context?.full);
+    this.canvas.dataset.full=String(!!this.context?.full && ![...this.images.values()].some(p=>p.reducedVideo));
     this.canvas.dataset.raw=hasRaw?rawSettingsKey(this.state.raw):'';
     this.canvas.dataset.view=JSON.stringify(this.state.view);
     this.canvas.dataset.selected=this.selectedIndex===null?'':String(this.selectedIndex);
     // Also release effects when returning to plain RGB, which creates no new effect.
     if(this.personal)queueMicrotask(()=>this.trim());
   }
+  /** Rasterize the full field once at the on-screen scale; the rail can reuse it. */
+  private videoPreview(p: Picture,scale: number) {
+    const width=Math.min(p.width,Math.max(128,Math.ceil(p.width*scale)));
+    if(width>=p.width)return p.bitmap;
+    const height=Math.max(1,Math.ceil(width*p.height/p.width));
+    if(p.preview?.width===width && p.preview.height===height)return p.preview;
+    const canvas=p.preview??=document.createElement('canvas');
+    canvas.width=width;canvas.height=height;
+    canvas.getContext('2d')!.drawImage(p.bitmap,0,0,width,height);
+    return canvas;
+  }
   private drawPicture(ctx: CanvasRenderingContext2D,p: Picture,index: number,cell: Cell,diff: boolean) {
     const b=p.box,matrix=this.matrix(index,cell),geometry=this.geometry(index,cell);
     p.used=performance.now();
     ctx.save();ctx.transform(matrix.a,matrix.b,matrix.c,matrix.d,matrix.e,matrix.f);
     ctx.imageSmoothingEnabled=p.quality!=='exact' || Math.min(geometry.scale,geometry.scaleY)<1;
-    ctx.drawImage(this.effect(p,diff),b.x,b.y,b.width,b.height);ctx.restore();
+    let source=this.effect(p,diff);
+    if(!p.reducedVideo && source===p.bitmap && 'displayWidth' in source)source=this.videoPreview(p,Math.max(geometry.scale,geometry.scaleY)*(devicePixelRatio||1));
+    ctx.drawImage(source,b.x,b.y,b.width,b.height);ctx.restore();
   }
   private effect(p: Picture,diff: boolean): CanvasImageSource {
     const s=this.state,gain=diff?s.gain:this.brightnessGain(p);
@@ -737,6 +953,7 @@ export class Viewer {
   }
   private trim() {
     const pinned=new Set([...this.images.values(),...this.diffs.values()].map(p=>p.key));
+    for(const picture of this.preloadedVideos.values())pinned.add(picture.key);
     for(const p of this.cache.values())for(const [slot,canvas] of p.thumbnails||[])if(this.images.get(this.ids[slot]||'')!==p){canvas.width=0;canvas.height=0;p.thumbnails!.delete(slot);}
     if(this.personal) {
       for(const [key,p] of this.effects)if(!this.activeEffects.has(key)){this.releaseEffect(p.canvas);this.effects.delete(key);}

@@ -23,6 +23,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from .host_memory import MEMORY_RESERVE_BYTES, available_memory_bytes
+
 
 class VideoImportError(RuntimeError):
     """A video could not be inspected or imported."""
@@ -181,14 +183,15 @@ def _probe(source: Path) -> dict[str, Any]:
 
 
 def _validate_stream(stream: dict[str, Any]) -> None:
-    """功能说明：校验视频流是否在支持范围内——常见 8-bit SDR、尺寸不超过 24 MP。
+    """功能说明：校验视频流的有效尺寸、位深、色彩传输和当前可用内存。
 
     调用时机：[import_video] 在 [_probe] 之后、启动解码之前调用。
 
     关键步骤：
-    1. 校验宽高有效且总像素不超过 2400 万；
+    1. 校验宽高有效；
     2. 按 bits_per_raw_sample 与像素格式名拒绝 9bit 以上高位深；
-    3. 按色彩传输函数拒绝 HDR（PQ/HLG 等）。
+    3. 按色彩传输函数拒绝 HDR（PQ/HLG 等）；
+    4. 根据源尺寸估算解码与 PNG 输出缓冲，检查内存余量。
 
     输出/副作用：不合规抛 VideoImportError；无其他副作用。
     """
@@ -199,8 +202,6 @@ def _validate_stream(stream: dict[str, Any]) -> None:
         raise VideoImportError("video has invalid dimensions") from exc
     if width <= 0 or height <= 0:
         raise VideoImportError("video has no usable video dimensions")
-    if width * height > 24_000_000:
-        raise VideoImportError("video exceeds the 24 MP image limit")
 
     pix_fmt = str(stream.get("pix_fmt") or "").lower()
     try:
@@ -215,6 +216,9 @@ def _validate_stream(stream: dict[str, Any]) -> None:
     transfer = str(stream.get("color_transfer") or "").lower()
     if transfer in _HDR_TRANSFERS:
         raise VideoImportError("HDR video is not supported; convert it to 8-bit SDR first")
+    available = available_memory_bytes()
+    if available is not None and available - width * height * 8 < MEMORY_RESERVE_BYTES:
+        raise VideoImportError("insufficient available physical memory to decode video and leave 512 MiB free")
 
 
 def _parse_showinfo(stderr: str) -> list[dict[str, Any]]:

@@ -19,7 +19,8 @@ for name in ("_raw10.dll",) if windows else ("_raw10.so", "libwebcompare-webkit.
     if path.is_file():
         binaries.append((str(path), "webcompare/native"))
 datas += copy_metadata("pyvips-binary") + collect_data_files("webview", subdir="js")
-excludes = ["pytest", "_pytest", "PIL", "tkinter", "PyQt5", "PyQt6", "PySide2", "PySide6", "qtpy", "cefpython3",
+# The optional NVDEC wheel is loaded from the owner's data directory.
+excludes = ["av", "pytest", "_pytest", "PIL", "tkinter", "PyQt5", "PyQt6", "PySide2", "PySide6", "qtpy", "cefpython3",
             "webview.platforms.qt", "webview.platforms.cef", "webview.platforms.cocoa", "webview.platforms.android",
             "webview.platforms.mshtml", "rich", "pygments", "jinja2", "yaml", "chardet", "pkg_resources"]
 if windows:

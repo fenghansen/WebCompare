@@ -3,19 +3,31 @@ import { t } from './i18n.js';
 import type { Input, VideoSampleSink, VideoSample } from 'mediabunny';
 import type { Asset, Metadata } from './api';
 import { videoFetch } from './api';
+import { checkMediaMemory, MediaMemoryError } from './media-memory';
+import { LocalNVDEC } from './nvdec';
+
+let localDecoderToken: string | undefined;
+export function configureLocalDecoder(csrf?:string) { localDecoderToken=csrf; }
 
 const uploaded=new Map<string,{file:File;revision:string}>();
 const remoteVideoOwners=new Map<VideoFrames,string>();
+const TIMESTAMP_CHECK_INTERVAL=16_384;
 export const videoExtensions='.mp4,.mov,.m4v,.webm,.mkv';
 export function rememberVideo(path:string,file:File,revision:string) { uploaded.delete(path);uploaded.set(path,{file,revision});while(uploaded.size>32)uploaded.delete(uploaded.keys().next().value!); }
 export function forgetVideos() { uploaded.clear(); }
 export function disconnectRemoteVideos(connectionId:string) { for(const [video,owner] of remoteVideoOwners)if(owner===connectionId)video.dispose(); }
 const cancelled=()=>new DOMException(t('已取消'),'AbortError');
 
+function validateVideoDimensions(width:number,height:number,personal:boolean,limitMessage:string) {
+  if(!Number.isSafeInteger(width)||!Number.isSafeInteger(height)||width<=0||height<=0||!Number.isSafeInteger(width*height))throw new Error(t('视频尺寸无效'));
+  if(!personal&&(Math.max(width,height)>8192||width*height>4096*2160))throw new Error(limitMessage);
+}
+
 /** 封面只读取首帧，串行调用方限制并发；不扫描整段帧索引。 */
-export async function videoPoster(source:File|string,signal:AbortSignal) {
+export async function videoPoster(source:File|string,signal:AbortSignal,personal=false) {
   if(!globalThis.isSecureContext||typeof VideoDecoder==='undefined')throw new Error(t('视频解码需要 HTTPS/localhost 和 WebCodecs 浏览器'));
   const {ALL_FORMATS,BlobSource,Input,UrlSource,VideoSampleSink}=await import('mediabunny');
+  if(personal&&!signal.aborted)await checkMediaMemory();
   if(signal.aborted)throw cancelled();
   const input=new Input({source:typeof source==='string'?new UrlSource(source,{maxCacheSize:512*1024,parallelism:1,fetchFn:videoFetch,requestInit:{credentials:'same-origin'},getRetryDelay:(n,error)=>String((error as {code?:string})?.code||'').startsWith('SSH_')?null:n<3?n:null,handleUnhandledError:()=>{}}):new BlobSource(source,{maxCacheSize:512*1024}),formats:ALL_FORMATS});
   const abort=()=>input.dispose();signal.addEventListener('abort',abort,{once:true});
@@ -23,10 +35,18 @@ export async function videoPoster(source:File|string,signal:AbortSignal) {
     const track=await input.getPrimaryVideoTrack();
     if(!track||!await track.canDecode())throw new Error(t('当前浏览器无法解码此视频'));
     const width=await track.getDisplayWidth(),height=await track.getDisplayHeight();
-    if(!width||!height||Math.max(width,height)>8192||width*height>4096*2160)throw new Error(t('视频尺寸超过逐帧对比范围'));
-    const sample=await new VideoSampleSink(track).getSample(Math.max(0,await track.getFirstTimestamp()));
+    validateVideoDimensions(width,height,personal,t('视频尺寸超过逐帧对比范围'));
+    const timestamp=await track.getFirstTimestamp();
+    if(!Number.isFinite(timestamp))throw new Error(t('视频时间戳无效'));
+    if(personal&&!signal.aborted) {
+      const codedPixels=(await track.getCodedWidth())*(await track.getCodedHeight());
+      await checkMediaMemory(Math.max(width*height,codedPixels)*4);
+    }
+    if(signal.aborted)throw cancelled();
+    const sample=await new VideoSampleSink(track).getSample(Math.max(0,timestamp));
     if(!sample)throw new Error(t('视频没有可读取的首帧'));
     try {
+      if(signal.aborted)throw cancelled();
       const canvas=document.createElement('canvas');canvas.width=160;canvas.height=100;
       const scale=Math.min(160/sample.displayWidth,100/sample.displayHeight),w=sample.displayWidth*scale,h=sample.displayHeight*scale;
       sample.draw(canvas.getContext('2d')!,(160-w)/2,(100-h)/2,w,h);return canvas.toDataURL('image/jpeg',.75);
@@ -39,16 +59,24 @@ export class VideoFrames {
   private input:Input|null=null;
   timestamps:number[]=[];
   metadata:Metadata|null=null;
+  private localReader:LocalNVDEC|null=null;
+  private localColor:VideoColorSpaceInit={};
+  private localIndex=-1;
+  decoderName='WebCodecs';
+  localFallback=false;
+  get canUseLocalDecoder() { return this.localReader!==null; }
   private sink:VideoSampleSink|null=null;
   private iterator:AsyncGenerator<VideoSample,void,unknown>|null=null;
   private last=-1;
   private disposed=false;
   private ready:Promise<void>|null=null;
   private serial:Promise<unknown>=Promise.resolve();
-  constructor(private source:File|string,sourcePath?:string) { const owner=sourcePath?.match(/^ssh:\/\/([^/]+)\//)?.[1];if(owner)remoteVideoOwners.set(this,owner); }
-  static asset(asset:Asset,share?:string) {
+  constructor(private source:File|string,sourcePath?:string,private personal=false) { const owner=sourcePath?.match(/^ssh:\/\/([^/]+)\//)?.[1];if(owner)remoteVideoOwners.set(this,owner); }
+  static asset(asset:Asset,share?:string,personal=false) {
     const file=uploaded.get(asset.path);
-    return new VideoFrames(file&&file.file.size===asset.bytes&&file.revision===asset.revision?file.file:`/api/assets/${encodeURIComponent(asset.id)}/video${share?'?share='+encodeURIComponent(share):''}`,asset.path);
+    const video=new VideoFrames(file&&file.file.size===asset.bytes&&file.revision===asset.revision?file.file:`/api/assets/${encodeURIComponent(asset.id)}/video${share?'?share='+encodeURIComponent(share):''}`,asset.path,personal);
+    if(localDecoderToken && !asset.path?.startsWith('ssh://'))video.localReader=new LocalNVDEC(asset.id,share,localDecoderToken);
+    return video;
   }
   init() {
     if(this.disposed)return Promise.reject(cancelled());
@@ -58,31 +86,61 @@ export class VideoFrames {
   private async initialize() {
     if(!globalThis.isSecureContext||typeof VideoDecoder==='undefined')throw new Error(t('逐帧解码需要支持 WebCodecs 的浏览器及 HTTPS（本机可用 localhost）'));
     const {ALL_FORMATS,BlobSource,EncodedPacketSink,Input,UrlSource,VideoSampleSink}=await import('mediabunny');
+    if(this.personal&&!this.disposed)await checkMediaMemory();
     if(this.disposed)throw cancelled();
     const source=typeof this.source==='string'?new UrlSource(this.source,{maxCacheSize:2*1024**2,parallelism:1,fetchFn:videoFetch,requestInit:{credentials:'same-origin'},getRetryDelay:(n,error)=>String((error as {code?:string})?.code||'').startsWith('SSH_')?null:n<3?Math.min(2,n):null,handleUnhandledError:()=>{}}):new BlobSource(this.source,{maxCacheSize:2*1024**2});
     this.input=new Input({source,formats:ALL_FORMATS});
     const track=await this.input.getPrimaryVideoTrack();
-    if(!track||!await track.canDecode())throw new Error(t('此浏览器不支持视频编码，请使用支持该编码的浏览器或转换文件'));
+    if(!track||(!this.localReader&&!await track.canDecode()))throw new Error(t('此浏览器不支持视频编码，请使用支持该编码的浏览器或转换文件'));
     const width=await track.getDisplayWidth(),height=await track.getDisplayHeight();
-    if(!width||!height||Math.max(width,height)>8192||width*height>4096*2160)throw new Error(t('视频逐帧对比暂限 4096×2160 像素以内'));
+    validateVideoDimensions(width,height,this.personal,t('视频逐帧对比暂限 4096×2160 像素以内'));
     this.metadata={width,height,bands:3,format:'png',has_alpha:false,has_icc:false,bit_depth:8};
-    // metadataOnly 只收集时间戳，避免把完整视频包和解码帧存进内存。
-    for await(const packet of new EncodedPacketSink(track).packets(undefined,undefined,{metadataOnly:true})) {
+    // 逐个读取 metadataOnly 包，内存检查期间也只保留当前包。
+    const packets=new EncodedPacketSink(track),options={metadataOnly:true};
+    for(let packet=await packets.getFirstPacket(options);packet;packet=await packets.getNextPacket(packet,options)) {
       if(this.disposed)throw cancelled();
-      if(this.timestamps.length>=500000)throw new Error(t('视频超过 50 万帧索引上限，请先截取所需片段'));
+      if(!this.personal&&this.timestamps.length>=500_000)throw new Error(t('视频超过 50 万帧索引上限，请先截取所需片段'));
       if(!Number.isFinite(packet.timestamp))throw new Error(t('视频时间戳无效'));
-      if(packet.timestamp>=0)this.timestamps.push(packet.timestamp);
+      if(packet.timestamp<0)continue;
+      if(this.personal&&this.timestamps.length%TIMESTAMP_CHECK_INTERVAL===0) {
+        await checkMediaMemory(TIMESTAMP_CHECK_INTERVAL*Float64Array.BYTES_PER_ELEMENT);
+        if(this.disposed)throw cancelled();
+      }
+      this.timestamps.push(packet.timestamp);
     }
+    // 排序可能会复制时间戳数组并分配临时空间。
+    if(this.personal&&!this.disposed)await checkMediaMemory(this.timestamps.length*2*Float64Array.BYTES_PER_ELEMENT);
+    if(this.disposed)throw cancelled();
     this.timestamps.sort((a,b)=>a-b);
     if(!this.timestamps.length||this.timestamps.some((t,i)=>i>0&&t-this.timestamps[i-1]<.000001))throw new Error(t('视频无法建立唯一的逐帧时间戳索引'));
+    if(this.localReader) {
+      const unchanged=!(await track.getRotation()) && !(await track.getFlip()) && width===await track.getCodedWidth() && height===await track.getCodedHeight();
+      if(!unchanged || await track.hasHighDynamicRange() || (await this.input.getVideoTracks()).length!==1) {
+        this.localReader.close();this.localReader=null;this.localFallback=true;
+      } else {
+        const color=await track.getColorSpace();
+        this.localColor={primaries:color.primaries??'bt709',transfer:color.transfer??'bt709',matrix:color.matrix??'bt709',fullRange:color.fullRange??false};
+      }
+    }
     this.sink=new VideoSampleSink(track,{optimizeForLatency:true});
   }
   /** 同一路解码严格串行，快速拖动只保留尚未过期的请求。 */
-  frame(index:number,signal:AbortSignal):Promise<ImageBitmap> {
+  frame(index:number,signal:AbortSignal,native=false,previewWidth?:number):Promise<ImageBitmap|VideoFrame> {
     const job=this.serial.catch(()=>{}).then(async()=>{
       await this.init();
       if(this.disposed||signal.aborted)throw cancelled();
       if(!Number.isInteger(index)||index<0||index>=this.timestamps.length)throw new Error(t`帧超出范围（1–${this.timestamps.length}）`);
+      if(this.localReader) {
+        const pts=(i:number)=>Math.round(this.timestamps[i]*1e6);
+        try {
+          const frame=await this.localReader.frame(pts(index),this.localIndex>=0&&index===this.localIndex+1?pts(this.localIndex):null,this.metadata!.width,this.metadata!.height,this.localColor,signal,previewWidth);
+          if(this.disposed||signal.aborted){frame.close();throw cancelled();}
+          this.localIndex=index;this.decoderName='NVDEC';return frame;
+        } catch(error) {
+          if(this.disposed || signal.aborted || error instanceof MediaMemoryError)throw error;
+          this.localReader.close();this.localReader=null;this.localFallback=true;this.decoderName='WebCodecs';
+        }
+      }
       if(!this.iterator||index<=this.last||index>this.last+12) {
         await this.iterator?.return();
         this.iterator=this.sink!.samples(this.timestamps[index]);this.last=index-1;
@@ -96,6 +154,12 @@ export class VideoFrames {
           if(Math.abs(sample.timestamp-this.timestamps[this.last])>.000002)throw new Error(t('解码帧与容器时间戳不一致，已停止以免显示错误帧'));
           if(this.disposed||signal.aborted)throw cancelled();
           if(this.last===index) {
+            // Container rotation and mirroring are applied by sample.draw on the fallback path.
+            if(native && !sample.rotation && !sample.flip && typeof VideoFrame!=='undefined') {
+              const source=sample.toCanvasImageSource();
+              if(source instanceof VideoFrame && source.displayWidth===sample.displayWidth && source.displayHeight===sample.displayHeight)
+                return source.clone();
+            }
             const canvas=new OffscreenCanvas(sample.displayWidth,sample.displayHeight);
             sample.draw(canvas.getContext('2d')!,0,0);
             return canvas.transferToImageBitmap();
@@ -107,7 +171,7 @@ export class VideoFrames {
     this.serial=job;return job;
   }
   private release() { void this.iterator?.return().catch(()=>undefined);this.iterator=null;this.input?.dispose();this.input=null;this.timestamps=[];this.metadata=null;this.sink=null;this.last=-1; }
-  dispose() { this.disposed=true;remoteVideoOwners.delete(this);this.release(); }
+  dispose() { this.localReader?.close();this.localReader=null;this.disposed=true;remoteVideoOwners.delete(this);this.release(); }
 }
 export async function checkVideo(file:File,signal:AbortSignal) {
   if(!/\.(mp4|mov|m4v|webm|mkv)$/i.test(file.name))throw new Error(t('请选择 MP4/MOV/M4V/WebM/MKV 视频'));

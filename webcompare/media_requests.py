@@ -17,11 +17,7 @@ def is_loopback(host):
         return False
 
 
-def local_image_transport(request: Request | None, settings) -> bool:
-    if settings.mode != "personal":
-        return False
-    if settings.client_transport != "auto":
-        return settings.client_transport == "local"
+def direct_loopback_request(request: Request | None) -> bool:
     if request is None or os.getenv("SSH_CONNECTION") or os.getenv("SSH_TTY"):
         return False
     if any(name in request.headers for name in ("forwarded", "x-forwarded-for", "x-forwarded-host", "x-forwarded-proto")):
@@ -29,6 +25,14 @@ def local_image_transport(request: Request | None, settings) -> bool:
 
     # SSH 隧道与本地 HTTP 可能完全相同；后台隧道实例可显式配置 remote。
     return bool(request.client and is_loopback(request.client.host) and is_loopback(request.url.hostname))
+
+
+def local_image_transport(request: Request | None, settings) -> bool:
+    if settings.mode != "personal":
+        return False
+    if settings.client_transport != "auto":
+        return settings.client_transport == "local"
+    return direct_loopback_request(request)
 
 
 async def while_connected(request: Request, operation):

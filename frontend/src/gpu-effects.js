@@ -101,7 +101,8 @@ export class GpuEffects {
 
   render(key, bitmap, table, channel) {
     if (!this.initialize()) return false;
-    const gl = this.gl, canvas = this.canvas, { width, height } = bitmap;
+    const gl = this.gl, canvas = this.canvas;
+    const width = bitmap.displayWidth ?? bitmap.width, height = bitmap.displayHeight ?? bitmap.height;
     if (width > this.maxSize || height > this.maxSize || width > this.maxViewport[0] || height > this.maxViewport[1]) return false;
     try {
       let entry = this.textures.get(key);

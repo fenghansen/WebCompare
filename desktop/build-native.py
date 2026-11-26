@@ -38,6 +38,7 @@ LINUX_DEPENDS = (
     "libglib2.0-0t64", "libffi8", "libssl3t64", "libsqlite3-0", "libbz2-1.0",
     "liblzma5", "libexpat1", "zlib1g", "libreadline8t64", "libtinfo6",
 )
+LINUX_RECOMMENDS = ("gstreamer1.0-libav",)
 SOURCE_PATTERNS = (
     "pyproject.toml", "requirements.lock", "LICENSE", "NOTICE",
     "desktop/*.py", "desktop/*.spec", "desktop/*.c", "desktop/requirements-native*.txt",
@@ -202,13 +203,13 @@ def linux_dependency_report():
     try:
         import apt
     except ImportError:
-        return {"depends": list(LINUX_DEPENDS), "cost_unavailable": "python3-apt is unavailable"}
+        return {"depends": list(LINUX_DEPENDS), "recommends": list(LINUX_RECOMMENDS), "cost_unavailable": "python3-apt is unavailable"}
     names = [item.split()[0] for item in LINUX_DEPENDS]
     cache = apt.Cache()
-    report = {"depends": list(LINUX_DEPENDS), "cost_note": (
+    report = {"depends": list(LINUX_DEPENDS), "recommends": list(LINUX_RECOMMENDS), "cost_note": (
         "empty_status is the complete dependency closure with an empty dpkg status, not the "
         "incremental cost of an existing Ubuntu Desktop. A real machine normally shares many libraries. "
-        "Download and installed sizes are package metadata estimates, excluding the application and caches.")}
+        "Download and installed sizes are package metadata estimates, excluding the application, recommended packages and caches.")}
     with tempfile.TemporaryDirectory(prefix="webcompare-dependency-cost-") as temp:
         status = Path(temp) / "status"
         status.touch()
@@ -263,6 +264,7 @@ def create_deb(app: Path, output: Path, version: str, arch: str):
             f"Package: webcompare-desktop\nVersion: {version}\nArchitecture: {arch}\n"
             "Maintainer: fenghansen\nSection: graphics\nPriority: optional\n"
             f"Installed-Size: {installed_kib}\nDepends: {', '.join(LINUX_DEPENDS)}\n"
+            f"Recommends: {', '.join(LINUX_RECOMMENDS)}\n"
             "Description: Local image and video comparison desktop\n"
             " Includes Python and image libraries. Uses the system GTK and WebKitGTK engine.\n", encoding="utf-8")
         target = output / f"webcompare-desktop_{version}_{arch}.deb"
@@ -440,6 +442,7 @@ def main():
             "WebCompare desktop - Ubuntu 24.04 x86_64\n\n"
             "Run ./webcompare-desktop. No Python or Node.js installation is needed.\n"
             "On a graphical Linux desktop with GTK and WebKitGTK available, unpack and run without sudo.\n"
+            "For H.264 playback, install Ubuntu gstreamer1.0-libav. Standard apt installs include it with the DEB.\n"
             "On a headless server, use the Python application with SSH port forwarding.\n"
             "With administrator access, apt install ./webcompare-desktop_*.deb also installs missing system libraries.\n"
             "For automation, run ./webcompare-ctl --help (or webcompare-ctl --help after .deb installation).\n"

@@ -192,6 +192,42 @@ export function slotAssets(comparison, state) {
   }
   return displayImageIndices(comparison,state).slice(page.start,page.end).map(index=>comparison.images[index]);
 }
+const videoSlotViews = new WeakMap();
+/** Repeated videos keep their original occurrence even when the page or display order changes.
+ * @returns {Array<{key:string,id:string}|null>}
+ */
+export function slotVideoAssets(comparison, state) {
+  if (!comparison) return [];
+  const {images,groups,assets}=comparison;
+  let view=videoSlotViews.get(comparison);
+  if (!view || view.images!==images || view.groups!==groups || view.assets!==assets) {
+    const seen=new Set(),repeated=new Set(),occurrences=new Map(),assetIds=new Map();
+    for (const id of groups?.length?groups.flatMap(group=>group.images):images) {
+      if (!id) continue;
+      if (seen.has(id)) repeated.add(id);
+      seen.add(id);
+    }
+    function slotKey(id) {
+      if (!repeated.has(id)) return id;
+      const occurrence=(occurrences.get(id)||0)+1,key=`video-slot-${id}-${occurrence}`;
+      occurrences.set(id,occurrence);assetIds.set(key,id);
+      return key;
+    }
+    let grouped=null,keys=null;
+    if (repeated.size && groups?.length) {
+      grouped={...comparison,assets:{...assets},groups:groups.map(group=>({...group,images:group.images.map(slotKey)}))};
+      for (const [key,id] of assetIds) grouped.assets[key]=assets[id];
+    } else if (repeated.size) keys=images.map(slotKey);
+    view={images,groups,assets,grouped,keys,assetIds};
+    videoSlotViews.set(comparison,view);
+  }
+  let keys;
+  if (view.keys) {
+    const page=pageInfo(comparison,state.layout,state.group_index,state);
+    keys=displayImageIndices(comparison,state).slice(page.start,page.end).map(index=>view.keys[index]);
+  } else keys=slotAssets(view.grouped||comparison,state);
+  return keys.map(key=>key?{key,id:view.assetIds.get(key)??key}:null);
+}
 /** 跨方法对齐时移除整路；普通清单和组内浏览移除单项，原清单保持完整。 */
 export function removeSlot(comparison, state, slot) {
   if (!comparison || !Number.isInteger(slot) || slot < 0) return comparison;
@@ -235,7 +271,7 @@ export function normalizeViewState(input, slots = 1, pages = 1) {
     channel: ['rgb','r','g','b'].includes(c.channel) ? c.channel : 'rgb',
     layout: validLayout(c.layout) ? c.layout : '1x2',
     quality: ['auto','high','exact'].includes(c.quality) ? c.quality : 'auto',
-    ...(c.video_frame!==undefined?{video_frame:Math.trunc(clamp(c.video_frame,0,500000,0)),video_offsets:Object.fromEntries(Object.entries(c.video_offsets||{}).slice(0,500).filter(([,v])=>Number.isInteger(v)&&Math.abs(v)<=500000))}:{}),
+    ...(c.video_frame!==undefined?{video_frame:Math.trunc(clamp(c.video_frame,0,Number.MAX_SAFE_INTEGER,0)),video_offsets:Object.fromEntries(Object.entries(c.video_offsets||{}).slice(0,500).filter(([,v])=>Number.isSafeInteger(v)))}:{}),
     grouping: c.grouping==='within'?'within':'aligned', natural_sort: c.natural_sort===true, transposed: c.transposed===true, raw: normalizeRawSettings(c.raw), view, panels };
 }
 /** An absent source stays absent. 边缘槽默认保持原图（保留未覆盖的内容）；

@@ -312,6 +312,7 @@ a{color:var(--accent)}
 
 /* 视频逐帧条复用工具栏，仅显示在视频模式。 */
 .video-controls{flex-wrap:wrap;padding:5px 8px;gap:8px}.video-controls input[type=number]{width:76px}.video-controls input[type=range]{width:200px;flex:1;min-width:80px}
+.video-controls .control[hidden]{display:none}
 
 .toolbar-bottom:has(.video-controls){flex-wrap:wrap}.toolbar-bottom .video-controls{flex-basis:100%}.lane-thumb canvas{max-width:100%;max-height:100%;object-fit:contain}
 @media(max-width:760px){.video-controls{flex-wrap:nowrap;justify-content:flex-start;padding:2px 0;gap:6px}.video-controls>*{flex-shrink:0}.video-controls input[type=range]{flex:0 0 160px;min-width:160px}.video-controls input[type=number]{width:58px}}
@@ -352,3 +353,5 @@ a{color:var(--accent)}
 .rail-insert-line[hidden]{display:none}
 .lane-rail[aria-busy=true] [data-rail-key]{cursor:progress}
 @media(prefers-reduced-motion:reduce){.lane-rail .lane,.lane-rail .compare-group{transition:none}}
+
+.decoder-control{display:inline-flex;align-items:center;gap:6px}.decoder-control .control{white-space:nowrap}.decoder-control select{max-width:19em}.decoder-install{color:var(--accent)}.settings-dialog>.decoder-control{margin-bottom:12px}

@@ -11,10 +11,12 @@
 已有图形会话并安装 GTK3 / WebKitGTK 4.1 的 Ubuntu 24.04 x86_64，可以直接解压 portable 包运行，无需 sudo，也无需安装 Python、Node.js 或编译器：
 
 ```sh
-tar -xzf webcompare-desktop-0.1.0-linux-x64.tar.gz
-cd webcompare-desktop-0.1.0
+tar -xzf webcompare-desktop-0.1.1-linux-x64.tar.gz
+cd webcompare-desktop-0.1.1
 ./webcompare-desktop
 ```
+
+Ubuntu 桌面壳播放 H.264 MP4 需系统提供 `gstreamer1.0-libav`。用便携包时，可运行 `sudo apt install gstreamer1.0-libav` 补齐。用 `apt install` 安装 DEB 时，默认随推荐依赖安装。
 
 运行 `./install-menu.sh` 可添加当前用户的应用菜单入口；之后保留此解压目录。默认用户数据位于 `~/.config/WebCompare Native`，可用 `--user-data-dir /path/to/state` 指定独立目录。
 

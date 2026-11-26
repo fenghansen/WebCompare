@@ -287,7 +287,7 @@ def _npy_layout(source: Path) -> dict[str, Any]:
     return {"height": shape[0], "width": shape[1], "dtype": dtype, "shape": list(shape)}
 
 
-def prepare_raw(source: Path, options: dict | None, max_pixels: int, *, source_name: str | None = None) -> dict[str, Any] | None:
+def prepare_raw(source: Path, options: dict | None, max_pixels: int | None, *, source_name: str | None = None) -> dict[str, Any] | None:
     # SSH cache names can differ on Windows; frame ledgers keep the original name.
     if not is_raw(source):
         return None
@@ -330,7 +330,7 @@ def _black_from_layers(layers: list[tuple[str, dict]]) -> tuple[Any, Any, str | 
     return None, None, None
 
 
-def _prepare_raw(source: Path, options: dict | None, max_pixels: int, *, source_name: str | None = None) -> dict[str, Any] | None:
+def _prepare_raw(source: Path, options: dict | None, max_pixels: int | None, *, source_name: str | None = None) -> dict[str, Any] | None:
     """Resolve one layout and snapshot every file that can affect auto values."""
     if not is_raw(source):
         return None
@@ -398,7 +398,7 @@ def _prepare_raw(source: Path, options: dict | None, max_pixels: int, *, source_
     if (any(type(value) is not int for value in (width, height, stride, depth))
             or min(width, height) < 2 or stride < width or stride > 100000 or not 1 <= depth <= 16):
         raise RawError("RAW 宽高、stride 或位深不合法")
-    if width * height > max_pixels or stride * height > max_pixels + height * 512:
+    if max_pixels is not None and (width * height > max_pixels or stride * height > max_pixels + height * 512):
         raise RawError("RAW 超出像素或 stride 内存上限", "PIXEL_LIMIT")
     if npy is None:
         packing = resolved["packing"]

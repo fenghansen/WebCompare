@@ -30,6 +30,7 @@ import time
 from collections import OrderedDict
 from contextlib import ExitStack, asynccontextmanager
 from pathlib import Path
+from uuid import UUID
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
@@ -47,9 +48,12 @@ from .moving import authorize_subtree, move_files
 from .db import Database
 from .downloads import FILES_ONLY_STATE_KEY, is_file_download, prepare_file_download
 from .files import FileCatalog, FileError, resolve_path, revision
+from .host_memory import available_memory_bytes
+from .nvdec_sessions import NVDECSessions
+from .nvdec_setup import NVDECInstallError, NVDECSetup, nvdec_installed
 from .image_formats import IMAGE_FORMATS
 from .source_http import source_file_response
-from .media_requests import local_image_transport, while_connected
+from .media_requests import direct_loopback_request, local_image_transport, while_connected
 from .models import FileCopyRequest, FileMoveRequest, ComparisonRequest, ComparisonTemplate, DeleteRequest, FileDownloadRequest, GroupOrderRequest, Login, MkdirRequest, RawOptions, RenameRequest, ReorderRequest, SharePatch, ShareRequest, SSHConnectionRequest
 from .templates import create_template, refresh_template, save_template, selection_from_manifest, template_state
 from .updates import DesktopUpdater, UpdateError, latest_summary
@@ -60,6 +64,7 @@ SHARE_VISIBILITIES = {
     "member": frozenset({"personal", "internal"}),
     "guest": frozenset({"personal", "public"}),
 }
+_NVDEC_FRAME_PATH = re.compile(r"/api/assets/[^/]+/nvdec/[^/]+")
 
 
 def fail(status: int, code: str, message: str):
@@ -161,8 +166,25 @@ class SecurityGuard:
 
         if request.method not in {"GET", "HEAD", "OPTIONS"}:
             origin = request.headers.get("origin")
-            expected = self.settings.base_url or str(request.base_url).rstrip("/")
-            if origin and origin.rstrip("/") != expected:
+            server_loopback = self.settings.mode == "server" and self.settings.client_transport != "remote"
+            local_nvdec = (
+                server_loopback and
+                ((request.method == "POST" and request.url.path in {"/api/auth/login", "/api/local/nvdec/install"}) or
+                 (request.method in {"POST", "DELETE"} and _NVDEC_FRAME_PATH.fullmatch(request.url.path))) and
+                direct_loopback_request(request)
+            )
+            if local_nvdec:
+                expected = f"{request.url.scheme}://{request.url.netloc}"
+            else:
+                expected = self.settings.base_url or str(request.base_url).rstrip("/")
+                if (server_loopback and request.method == "POST" and request.url.path == "/api/comparisons"
+                        and origin != expected and origin == f"{request.url.scheme}://{request.url.netloc}"
+                        and direct_loopback_request(request)):
+                    # The route must also verify the existing session, CSRF, role and media kind.
+                    request.state.loopback_comparison_origin = True
+                    expected = origin
+                origin = origin.rstrip("/") if origin else origin
+            if origin and origin != expected:
                 response = JSONResponse({"detail": {"code": "ORIGIN_FORBIDDEN", "message": "请求必须来自比图服务本身"}}, status_code=403)
                 return await response(scope, receive, guarded_send)
             if request.headers.get("sec-fetch-site") == "cross-site":
@@ -260,6 +282,7 @@ def create_app(settings: Settings | None = None, *, native_desktop: bool = False
     settings.prepare()
     db = Database(settings.data_dir / "webcompare.sqlite3")
     server = settings.mode == "server"
+    max_pixels = settings.max_pixels if server else None
     storage = None
     quota = None
     share_key = None
@@ -287,6 +310,7 @@ def create_app(settings: Settings | None = None, *, native_desktop: bool = False
         remote = SSHManager(settings, db)
     catalog = FileCatalog(settings, db, storage, remote)
     local = LocalProvider(db)
+    nvdec_setup = NVDECSetup(settings.data_dir)
     attempts: OrderedDict[str, list[float]] = OrderedDict()
     login_semaphore = asyncio.Semaphore(2)
     upload_semaphore = asyncio.Semaphore(4 if settings.profile == "intranet" else 2)
@@ -316,7 +340,8 @@ def create_app(settings: Settings | None = None, *, native_desktop: bool = False
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         from .media import MediaService
-        app.state.media = MediaService(settings.data_dir / "cache", cache_bytes=settings.cache_bytes, max_pixels=settings.max_pixels, disk_min_free_bytes=settings.disk_min_free_bytes if server else 0, sandbox="namespace" if server and settings.profile == "cloud" else settings.sandbox if server else None, max_pending=2 if settings.profile == "cloud" else 16, preview_effort=settings.preview_effort, png_compression=settings.png_compression, raw_high_format=settings.raw_high_format, allow_source_passthrough=not server)
+        app.state.nvdec = NVDECSessions()
+        app.state.media = MediaService(settings.data_dir / "cache", cache_bytes=settings.cache_bytes, max_pixels=max_pixels, disk_min_free_bytes=settings.disk_min_free_bytes if server else 0, sandbox="namespace" if server and settings.profile == "cloud" else settings.sandbox if server else None, max_pending=2 if settings.profile == "cloud" else 16, preview_effort=settings.preview_effort, png_compression=settings.png_compression, raw_high_format=settings.raw_high_format, allow_source_passthrough=not server)
         if remote is not None:
             from .source_media import SourceMediaService
             app.state.media = SourceMediaService(app.state.media, catalog)
@@ -346,6 +371,7 @@ def create_app(settings: Settings | None = None, *, native_desktop: bool = False
                 if janitor is not None:
                     janitor_stop.set()
                     await janitor
+                await app.state.nvdec.close()
                 await app.state.exports.close()
                 await app.state.media.close()
                 if remote is not None:
@@ -374,9 +400,38 @@ def create_app(settings: Settings | None = None, *, native_desktop: bool = False
         """访客会话附带的保留规则：工作区 ID（= 用户 ID）、配额与三档 TTL 秒数。"""
         return {"id": user["id"], "quota_bytes": settings.guest_quota_bytes, "content_ttl_seconds": settings.guest_content_ttl, "exit_ttl_seconds": settings.guest_exit_ttl, "idle_ttl_seconds": settings.guest_idle_ttl}
 
+    def local_nvdec(request, user):
+        role_ok = user['role'] == 'admin' if server else user['role'] in {'admin', 'member'}
+        return role_ok and settings.client_transport != 'remote' and direct_loopback_request(request) and nvdec_installed()
+
+    def can_install_nvdec(request: Request | None, user: dict) -> bool:
+        if settings.client_transport == "remote" or not direct_loopback_request(request):
+            return False
+        if server:
+            return user["role"] == "admin"
+        if user["role"] not in {"admin", "member"}:
+            return False
+        # Match personal_user's existing owner, or its read-only selection on an unbound legacy store.
+        owner = db.one(
+            "SELECT COALESCE((SELECT user_id FROM identities WHERE provider='personal' AND subject='owner'),"
+            " (SELECT u.id FROM users u JOIN local_credentials c ON c.user_id=u.id"
+            " WHERE u.active=1 AND u.role IN ('member','admin') ORDER BY u.created_at,u.rowid LIMIT 1)) AS id"
+        )
+        return owner["id"] == user["id"]
+
+    def with_nvdec_setup(payload: dict, request: Request | None) -> dict:
+        if can_install_nvdec(request, payload["user"]):
+            status = nvdec_setup.status()
+            payload["nvdec_setup"] = status
+            if status == "ready":
+                payload["local_nvdec"] = True
+        return payload
+
     def session_payload(user: dict, csrf: str, request: Request | None = None) -> dict:
         """登录/会话/访客创建共用载荷；前端按 login_required 决定登录与退出入口。"""
-        payload = {"user": user, "csrf": csrf, "profile": settings.profile, "limits": {"max_pixels": settings.max_pixels, "max_sources": settings.max_sources, "max_files_per_source": settings.max_files_per_source}, "mode": settings.mode, "login_required": settings.login_required, "local_images": local_image_transport(request, settings)}
+        payload = {"user": user, "csrf": csrf, "profile": settings.profile, "limits": {"max_pixels": max_pixels, "max_sources": settings.max_sources, "max_files_per_source": settings.max_files_per_source}, "mode": settings.mode, "login_required": settings.login_required, "local_images": local_image_transport(request, settings)}
+        if local_nvdec(request, user):
+            payload["local_nvdec"] = True
         if server and user["role"] == "guest":
             payload["workspace"] = workspace_payload(user)
         return payload
@@ -453,7 +508,7 @@ def create_app(settings: Settings | None = None, *, native_desktop: bool = False
                 conn.execute("DELETE FROM sessions WHERE token_hash=?", (token_hash(old),))
             conn.execute("INSERT INTO sessions VALUES(?,?,?,?)", (token_hash(raw), user_id, csrf, int(now) + settings.session_days * 86400))
         response.set_cookie("wc_session", raw, max_age=settings.session_days * 86400, httponly=True, secure=settings.secure_cookie, samesite="lax", path="/")
-        return session_payload(public_user(db, user_id), csrf, request)
+        return with_nvdec_setup(session_payload(public_user(db, user_id), csrf, request), request)
 
     def owned_comparison(comparison_id: str, user: dict):
         row = db.one("SELECT * FROM comparisons WHERE id=?", (comparison_id,))
@@ -526,6 +581,13 @@ def create_app(settings: Settings | None = None, *, native_desktop: bool = False
     async def health():
         return {"status": "ok", "version": __version__}
 
+    if not server:
+        @app.get("/api/personal/memory")
+        def personal_memory(request: Request, _session=Depends(require_session)) -> dict[str, int | None]:
+            if settings.client_transport != "remote" and direct_loopback_request(request):
+                return {"available_bytes": available_memory_bytes()}
+            return {"available_bytes": None}
+
     @app.get("/api/updates/latest")
     def get_latest_update():
         try:
@@ -594,12 +656,24 @@ def create_app(settings: Settings | None = None, *, native_desktop: bool = False
     async def current(request: Request, response: Response):
         """Personal 免登录只在此补发正常会话；其他 API 继续要求 Cookie 与 CSRF。"""
         try:
-            return require_session(request)
+            return with_nvdec_setup(require_session(request), request)
         except HTTPException as exc:
             if settings.login_required or exc.status_code != 401:
                 raise
         user = await run_in_threadpool(personal_user, db)
         return sign_session(response, user["id"], request, personal=True)
+
+    @app.post("/api/local/nvdec/install")
+    async def install_nvdec(request: Request, session=Depends(require_session)):
+        if not can_install_nvdec(request, session["user"]):
+            fail(403, "NVDEC_INSTALL_FORBIDDEN", "仅本机工作台所有者或 Server 管理员可安装 NVIDIA 硬件解码组件")
+        if await request.body():
+            fail(400, "NVDEC_INSTALL_BAD_REQUEST", "此安装入口无需请求正文")
+        try:
+            await run_in_threadpool(nvdec_setup.install)
+        except NVDECInstallError as exc:
+            fail(exc.status, exc.code, str(exc))
+        return {"status": "ready"}
 
     @app.post("/api/auth/logout")
     async def logout(request: Request, response: Response, session=Depends(require_session)):
@@ -732,7 +806,10 @@ def create_app(settings: Settings | None = None, *, native_desktop: bool = False
         return result
 
     @app.post("/api/comparisons")
-    async def create_comparison(body: ComparisonRequest, session=Depends(require_area_session)):
+    async def create_comparison(body: ComparisonRequest, request: Request, session=Depends(require_area_session)):
+        if getattr(request.state, "loopback_comparison_origin", False) and (
+                session["user"]["role"] != "admin" or body.media_kind != "video"):
+            fail(403, "ORIGIN_FORBIDDEN", "本机来源只允许管理员创建视频比较")
         groups = None if body.groups is None else [group.model_dump() for group in body.groups]
         sources = [s.model_dump() for s in body.sources]
         if remote is not None:
@@ -885,6 +962,29 @@ def create_app(settings: Settings | None = None, *, native_desktop: bool = False
         if not catalog.is_video(path):
             fail(422, "NOT_VIDEO", "资源不是视频")
         return await source_file_response(catalog, path, request)
+
+    @app.api_route("/api/assets/{asset_id}/nvdec/{reader_id}", methods=["POST", "DELETE"])
+    async def nvdec_frame(asset_id: str, reader_id: UUID, request: Request, pts_us: int = Query(0, ge=0),
+                          previous_us: int | None = Query(None, ge=0), preview_width: int | None = Query(None, ge=1, le=65535),
+                          share: str | None = None,
+                          session=Depends(require_session)):
+        if not session.get("local_nvdec"):
+            fail(403, "LOCAL_NVDEC_UNAVAILABLE", "本机 NVDEC 未启用")
+        key = (session["user"]["id"], asset_id, share, reader_id)
+        if request.method == "DELETE":
+            await app.state.nvdec.discard(key)
+            return Response(status_code=204)
+        asset, path = await run_in_threadpool(read_asset, asset_id, session, share, materialize=False)
+        if not isinstance(path, Path) or not catalog.is_video(path):
+            fail(422, "NVDEC_UNSUPPORTED_SOURCE", "本机 NVDEC 需要磁盘上的视频文件")
+        from .nvdec import NVDECError, NVDECMemoryError
+        try:
+            frame = await app.state.nvdec.frame(key, path, asset["revision"], pts_us, previous_us, preview_width)
+        except NVDECMemoryError as exc:
+            fail(507, "NVDEC_MEMORY", str(exc))
+        except NVDECError as exc:
+            fail(422, "NVDEC_UNAVAILABLE", str(exc))
+        return Response(frame, media_type="application/octet-stream", headers={"Cache-Control": "private, no-store", "Vary": "Cookie", "Content-Encoding": "identity"})
 
     @app.get("/api/assets/{asset_id}/metadata")
     async def metadata(asset_id: str, request: Request, share: str | None = None, raw: str | None = Query(None, max_length=4096), session=Depends(media_session)):
